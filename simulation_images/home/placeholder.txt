@@ -1,0 +1,24 @@
+
+PLACEHOLDER IMAGE: home
+
+This is a placeholder for the observation image.
+Please replace this with an actual image file:
+
+Expected path: simulation_images/home/placeholder.jpg
+
+State context:
+{
+  "location": "home",
+  "ac_status": "on",
+  "ac_temperature": 24,
+  "light_status": "off",
+  "carrying_item": null,
+  "human_present": true
+}
+
+To use real images:
+1. Provide a JPG/PNG image of the home scene
+2. Name it appropriately based on state
+3. Place it in the correct directory
+
+For now, the VLM planner will receive a text description instead.
