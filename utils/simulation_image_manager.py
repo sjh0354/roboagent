@@ -209,6 +209,10 @@ Examples:
                 # Get most recent change
                 last_change = self.state_history[-1]["changes"]
 
+                # If location changed, prioritize default view for that location
+                if "location" in last_change:
+                    return self._get_fallback_image(location)
+
                 # If light was just changed, prioritize light state
                 if "light_status" in last_change:
                     if self.state["light_status"] == "on":
@@ -239,10 +243,6 @@ Examples:
 
             if self.state["light_status"] == "on":
                 state_key = "home_light_on"
-                if state_key in self.image_map and os.path.exists(self.image_map[state_key]):
-                    return self.image_map[state_key]
-            elif self.state["light_status"] == "off":
-                state_key = "home_light_off"
                 if state_key in self.image_map and os.path.exists(self.image_map[state_key]):
                     return self.image_map[state_key]
 
