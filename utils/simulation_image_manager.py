@@ -119,7 +119,7 @@ Examples:
         """Load default image mappings"""
         # Default images for each location
         self.image_map = {
-            "home_default": os.path.join(self.image_directory, "home", "default.png"),
+            "home_default": os.path.join(self.image_directory, "home", "default.jpg"),
             "home_ac_on_22": os.path.join(self.image_directory, "home", "ac_on_22.jpg"),
             "home_ac_on_24": os.path.join(self.image_directory, "home", "ac_on_24.jpg"),
             "home_ac_off": os.path.join(self.image_directory, "home", "ac_off.jpg"),

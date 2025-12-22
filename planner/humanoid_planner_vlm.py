@@ -150,9 +150,20 @@ class AutonomousVLMPlanner:
             # Get current observation image (reflects assumed state after last action)
             current_observation = self.executor.get_current_observation()
             current_image = current_observation['image_path']
-
+            
+            # Update location from observation state (Ground Truth)
+            if 'state' in current_observation and 'location' in current_observation['state']:
+                sim_location = current_observation['state']['location']
+                # Map simulation location to Room ID
+                location_map = {
+                    "home": "Room 01",
+                    "store": "Room 02"
+                }
+                self.current_location = location_map.get(sim_location, "Room 01")
+                
             if self.verbose:
                 print(f"\n📸 Current observation image: {current_image}")
+                print(f"📍 Current location (from state): {self.current_location}")
 
             # Plan next step with image
             step_plan = self.plan_next_step_with_image(current_image)
