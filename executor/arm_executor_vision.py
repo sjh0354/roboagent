@@ -7,6 +7,7 @@ Extends ArmExecutor with vision-based observation capabilities
 
 import os
 import time
+import subprocess
 from typing import Dict, Any, Optional
 from executor.arm_executor import ArmExecutor, ExecutionResult
 from utils.qwen_vlm_client import QwenVLMClient
@@ -96,12 +97,29 @@ class VisionEnabledArmExecutor(ArmExecutor):
         Execute action with vision-based observation
 
         Flow:
-        1. Execute action using base executor
+        1. Execute action (using base executor or PI0 script for real hardware 'act')
         2. Capture observation AFTER action (RealSense or Simulation)
         3. Return enhanced ExecutionResult
         """
-        # Execute using base executor
-        base_result = super().execute_action(action_type, action_name, parameters)
+        
+        # Intercept 'act' actions for real hardware execution using PI0 script
+        if not self.simulation_mode and action_type == "act":
+            instruction = ""
+            if action_name == "pick_from_shelf":
+                item_name = parameters.get("item_name", "item")
+                instruction = f"Pick the {item_name} from the shelf."
+            elif action_name == "place_on_counter":
+                item_name = parameters.get("item_name", "item")
+                instruction = f"Place the {item_name} on the counter."
+            
+            if instruction:
+                base_result = self._execute_pi0_script(instruction)
+            else:
+                # Fallback to base execution if action unknown or no instruction
+                base_result = super().execute_action(action_type, action_name, parameters)
+        else:
+            # Execute using base executor for simulation or non-act actions
+            base_result = super().execute_action(action_type, action_name, parameters)
 
         # Handle observation capture
         observation_image = None
@@ -142,6 +160,40 @@ class VisionEnabledArmExecutor(ArmExecutor):
                         print(f"⚠️  VLM observation failed: {str(e)}")
 
         return base_result
+    
+    def _execute_pi0_script(self, instruction: str) -> ExecutionResult:
+        """
+        Execute PI0 inference script with instruction using subprocess
+        """
+        try:
+            # Get script path: parent_of_executor/utils/run_pi0_inference.sh
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            script_path = os.path.join(base_dir, "utils", "run_pi0_inference.sh")
+            
+            if not os.path.exists(script_path):
+                return ExecutionResult(False, f"Script not found: {script_path}", error="FileNotFound")
+            
+            if self.verbose:
+                print(f"🚀 Launching PI0 inference script: {script_path}")
+                print(f"   Instruction: {instruction}")
+
+            # Prepare environment variables
+            env = os.environ.copy()
+            env["INSTRUCTION"] = instruction
+            
+            # Execute script
+            # The script uses tmux -d, so it should return relatively quickly
+            subprocess.run(["bash", script_path], env=env, check=True)
+            
+            return ExecutionResult(
+                success=True,
+                feedback=f"Launched PI0 inference with instruction: '{instruction}'",
+                data={"instruction": instruction, "script": script_path}
+            )
+        except subprocess.CalledProcessError as e:
+            return ExecutionResult(False, f"Script execution failed", error=str(e))
+        except Exception as e:
+            return ExecutionResult(False, f"Failed to launch script", error=str(e))
 
     def get_current_observation(self) -> Dict[str, Any]:
         """
