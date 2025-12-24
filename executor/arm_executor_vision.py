@@ -105,12 +105,11 @@ class VisionEnabledArmExecutor(ArmExecutor):
         # Intercept 'act' actions for real hardware execution using PI0 script
         if not self.simulation_mode and action_type == "act":
             instruction = ""
-            if action_name == "pick_from_shelf":
+            if action_name == "pick_and_place":
                 item_name = parameters.get("item_name", "item")
-                instruction = f"Pick the {item_name} from the shelf."
-            elif action_name == "place_on_counter":
-                item_name = parameters.get("item_name", "item")
-                instruction = f"Place the {item_name} on the counter."
+                source = parameters.get("source", "shelf")
+                target = parameters.get("target", "counter")
+                instruction = f"Pick the {item_name} from the {source} and place it on the {target}."
             
             if instruction:
                 base_result = self._execute_pi0_script(instruction)

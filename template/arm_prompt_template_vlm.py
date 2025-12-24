@@ -65,11 +65,12 @@ You are a specialized VLM (Vision-Language Model) planner for a UR5e robotic arm
 | Action Type | Action Name | Parameters | Description |
 |-------------|-------------|------------|-------------|
 | **talk** | `speak` | message | Send status/response to humanoid robot |
-| **act** | `pick_from_shelf` | item_name | Retrieve item from shelf |
-| **act** | `place_on_counter` | item_name | Place item on service counter |
+| **act** | `pick_and_place` | item_name, source, target | Pick item from source and place on target (e.g., shelf -> counter) |
 | **sense** | `get_observation` | (none) | Request new visual observation |
 
 **Available Items**: water, snacks, fruit, medicine
+**Common Sources**: shelf, counter
+**Common Targets**: counter, shelf, user_hand
 
 **EXAMPLES OF CORRECT ACTION USAGE:**
 
@@ -77,9 +78,9 @@ You are a specialized VLM (Vision-Language Model) planner for a UR5e robotic arm
 ```json
 {
   "next_step": {
-    "action": "pick_from_shelf",
+    "action": "pick_and_place",
     "action_type": "act",
-    "parameters": {"item_name": "water"}
+    "parameters": {"item_name": "water", "source": "shelf", "target": "counter"}
   }
 }
 ```
@@ -109,13 +110,13 @@ You are a specialized VLM (Vision-Language Model) planner for a UR5e robotic arm
 ```json
 {
   "next_step": {
-    "action": "grasp_item",  // ← INVALID! Use "pick_from_shelf" instead
+    "action": "pick_from_shelf",  // ← INVALID! Use "pick_and_place" instead
     "action_type": "act"
   }
 }
 ```
 
-**REMEMBER: Only use the 4 actions listed in the table above. No exceptions.**
+**REMEMBER: Only use the 3 actions listed in the table above. No exceptions.**
 
 ## VISION-BASED PLANNING PROTOCOL (CRITICAL)
 
@@ -206,10 +207,9 @@ Return ONE step in this JSON structure:
 ### Action Selection Based on Visual Evidence
 
 **Example Decision Tree:**
-- See empty counter + humanoid requested water → Plan: pick water from shelf
-- See water in gripper → Plan: place on counter
+- See empty counter + humanoid requested water → Plan: pick_and_place water from shelf to counter
 - See water on counter → Plan: notify humanoid
-- See counter with item + new request comes → Plan: place current item before picking new one
+- See counter with item + new request comes → Plan: pick_and_place current item to shelf before picking new one
 
 ### Planning Strategy
 
@@ -233,15 +233,15 @@ Return ONE step in this JSON structure:
   "current_step_analysis": {
     "visual_state": "Shelves visible with water bottles. Counter empty. Gripper empty.",
     "task_progress": "Starting water retrieval task",
-    "next_action_reasoning": "Water is visibly available. Pick from shelf."
+    "next_action_reasoning": "Water is visibly available. Pick from shelf and place on counter."
   },
   "next_step": {
     "step_number": 1,
     "agent": "ur5e_arm",
     "location": "store",
-    "action": "pick_from_shelf",
+    "action": "pick_and_place",
     "action_type": "act",
-    "parameters": {"item_name": "water"}
+    "parameters": {"item_name": "water", "source": "shelf", "target": "counter"}
   },
   "needs_human_input": false,
   "humanoid_question": null
@@ -252,31 +252,8 @@ Return ONE step in this JSON structure:
 
 **Planning Call 2**:
 
-*Visual Observation*: Based on updated state, water has been picked.
+*Visual Observation*: Based on updated state, water is on counter.
 
-```json
-{
-  "current_step_analysis": {
-    "visual_state": "Water has been picked (action assumed successful). Counter empty and ready.",
-    "task_progress": "Water picked successfully. Need to place on counter.",
-    "next_action_reasoning": "Water in gripper. Place on counter for humanoid pickup."
-  },
-  "next_step": {
-    "step_number": 2,
-    "agent": "ur5e_arm",
-    "location": "store",
-    "action": "place_on_counter",
-    "action_type": "act",
-    "parameters": {"item_name": "water"}
-  },
-  "needs_human_input": false,
-  "humanoid_question": null
-}
-```
-
-**[Action Executed - Assumed Successful]**
-
-**Planning Call 3**:
 ```json
 {
   "current_step_analysis": {
@@ -285,7 +262,7 @@ Return ONE step in this JSON structure:
     "next_action_reasoning": "Notify humanoid that water is ready"
   },
   "next_step": {
-    "step_number": 3,
+    "step_number": 2,
     "agent": "ur5e_arm",
     "location": "store",
     "action": "speak",
@@ -299,7 +276,7 @@ Return ONE step in this JSON structure:
 
 **[Message Delivered - Assumed Successful]**
 
-**Planning Call 4**:
+**Planning Call 3**:
 ```json
 {
   "current_step_analysis": {
@@ -309,9 +286,9 @@ Return ONE step in this JSON structure:
   },
   "next_step": null,
   "task_summary": {
-    "total_steps_executed": 3,
+    "total_steps_executed": 2,
     "final_visual_state": "Water bottle on counter, workspace ready for next task",
-    "actions_performed": ["pick_from_shelf", "place_on_counter", "speak"],
+    "actions_performed": ["pick_and_place", "speak"],
     "success": true
   },
   "needs_human_input": false
@@ -320,7 +297,7 @@ Return ONE step in this JSON structure:
 
 ## Important Reminders
 
-1. **⚠️ ONLY USE THE 4 ALLOWED ACTIONS** - Never invent actions! Use ONLY: speak, pick_from_shelf, place_on_counter, get_observation
+1. **⚠️ ONLY USE THE 3 ALLOWED ACTIONS** - Never invent actions! Use ONLY: speak, pick_and_place, get_observation
 2. **You SEE images directly** - Don't ask for visual descriptions, analyze the image yourself
 3. **Assume successful execution** - All actions are assumed to execute successfully (half-open-loop mode)
 4. **Minimize communication** - Only talk when necessary (status updates, completion, essential communication)
@@ -386,11 +363,10 @@ def validate_arm_vlm_response(response_text):
     Returns:
         tuple: (is_valid, message)
     """
-    # Define allowed actions for arm (4 actions only)
+    # Define allowed actions for arm (3 actions only)
     ALLOWED_ACTIONS = {
         "speak",
-        "pick_from_shelf",
-        "place_on_counter",
+        "pick_and_place",
         "get_observation"
     }
 
@@ -487,9 +463,9 @@ if __name__ == "__main__":
     "step_number": 1,
     "agent": "ur5e_arm",
     "location": "store",
-    "action": "pick_from_shelf",
+    "action": "pick_and_place",
     "action_type": "act",
-    "parameters": {"item_name": "water"}
+    "parameters": {"item_name": "water", "source": "shelf", "target": "counter"}
   },
   "needs_human_input": false,
   "humanoid_question": null
