@@ -17,7 +17,7 @@ from typing import Dict, Optional
 from openai import OpenAI
 
 from executor.arm_executor_vision import VisionEnabledArmExecutor
-from utils.realsense_manager import RealSenseCameraManager
+# from utils.realsense_manager import RealSenseCameraManager # Removed: Handled by Executor
 from template.arm_prompt_template_vlm import (
     get_arm_vlm_system_prompt,
     get_arm_vlm_config,
@@ -64,16 +64,6 @@ class AutonomousArmVLMPlanner:
         self.config = get_arm_vlm_config(model_name)
         self.verbose = verbose
         self.simulation_mode = simulation_mode
-        self.camera_manager = None
-
-        if not self.simulation_mode:
-            try:
-                self.camera_manager = RealSenseCameraManager(verbose=verbose)
-            except Exception as e:
-                if self.verbose:
-                    print(f"⚠️  Camera initialization failed: {e}")
-                    print("   Switching to simulation mode")
-                self.simulation_mode = True
 
         # Initialize OpenAI client (for VLM API)
         self.client = OpenAI(
@@ -92,6 +82,8 @@ class AutonomousArmVLMPlanner:
         )
         
         # Initialize Executor
+        # Note: Executor handles Camera initialization internally. 
+        # We must not initialize RealSenseCameraManager here to avoid "Device busy" errors.
         self.executor = VisionEnabledArmExecutor(
             simulation_mode=self.simulation_mode,
             verbose=verbose,
@@ -153,27 +145,14 @@ class AutonomousArmVLMPlanner:
 
     def _get_default_observation_image(self) -> str:
         """Get default observation image for store workspace"""
-        # Delegate to executor if possible
+        # Delegate to executor
         if hasattr(self, 'executor'):
              obs = self.executor.get_current_observation()
              if obs.get('image_path'):
                  return obs['image_path']
 
-        if self.simulation_mode:
-            # For simulation, use default store image
-            return "simulation_images/store/default.jpg"
-        elif self.camera_manager:
-            # For real mode, capture from camera
-            img_path = self.camera_manager.capture_image()
-            if img_path:
-                return img_path
-            else:
-                if self.verbose:
-                    print("⚠️  Capture failed, using simulation default")
-                return "simulation_images/store/default.jpg"
-        else:
-            # Fallback
-            return "simulation_images/store/default.jpg"
+        # Fallback for simulation or failure
+        return "simulation_images/store/default.jpg"
 
     def _run_autonomous_loop(self) -> Dict:
         """

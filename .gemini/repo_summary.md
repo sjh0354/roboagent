@@ -1,28 +1,40 @@
 # Repository Summary: Vision-Based Robotic Agent System
 
 ## Project Goal
-This repository contains a vision-based autonomous planning system for a humanoid robot, which cooperates with a separate robotic arm planner. The system's primary objective is to use a Vision Language Model (VLM), specifically Qwen, to interpret visual scenes from a simulated environment and generate step-by-step action plans to achieve high-level user goals.
+This repository contains a vision-based autonomous planning system for a humanoid robot (Unitree-G1) and a robotic arm (UR5e). The system leverages Vision Language Models (VLM), specifically Qwen, to interpret visual scenes and generate action plans. It has evolved from a pure simulation to a system capable of interfacing with real-world hardware.
 
 ## Core Architecture
-The system is composed of four main components that work together in a perceive-plan-act cycle:
+The system follows a perceive-plan-act cycle with the following key components:
 
 1.  **Planners (`humanoid_planner_vlm.py`, `arm_planner_vlm.py`):**
-    These are the "brains" of the system. They receive a user goal, observe the current state via an image from the simulation, and query the VLM to determine the single next best action to take. The humanoid and arm planners are distinct agents, suggesting a cooperative model where the humanoid handles navigation and can delegate manipulation tasks to the arm.
+    *   Autonomous agents that use VLM to plan the next step based on visual observations.
+    *   Operate in a **"Half-Open-Loop"** mode: They assume action success but use fresh visual input (real or simulated) for each planning step.
+    *   Support for human (humanoid) or humanoid (arm) interaction for clarifications.
 
-2.  **Executor (`humanoid_executor_vision.py`):**
-    This is the "body" of the robot. It takes the action chosen by the planner (e.g., "move to the living room") and executes it within the simulation. It inherits from a base executor (`humanoid_executor.py`) that defines the primitive actions available to the robot.
+2.  **Vision-Enabled Executors (`humanoid_executor_vision.py`, `arm_executor_vision.py`):**
+    *   **Humanoid Executor:** Manages navigation and tool interaction for the Unitree-G1.
+    *   **Arm Executor:** Manages manipulation tasks for the UR5e arm.
+    *   **Vision Integration:** Both executors capture observations (images) before/after actions and can use VLM to generate textual descriptions of these observations.
+    *   **Hardware Interfacing:** The arm executor can trigger real-world actions via a PI0 inference script (`run_pi0_inference.sh`).
+    *   **Speech Capability:** Both executors are equipped with a `TTSManager` (`utils/tts_manager.py`) to synthesize speech, supporting DashScope's CosyVoice (if configured) and a system-level fallback (`espeak`).
 
-3.  **Simulation Image Manager (`simulation_image_manager.py`):**
-    This is the "world" or state machine for the simulation. It tracks the current state of the environment (e.g., robot location, status of devices like the AC or lights) and provides the correct image that corresponds to that state. When the executor performs an action, the manager updates its state and provides the new image for the next planning cycle.
+3.  **Hardware & Vision Management:**
+    *   **RealSense Manager (`realsense_manager.py`):** Handles image capture from Intel RealSense D435 cameras for real-world robot vision.
+    *   **Simulation Image Manager (`simulation_image_manager.py`):** Manages simulated world state and provides corresponding images for testing.
+    *   **VLM Client (`qwen_vlm_client.py`):** Interface for the Qwen VLM API (DashScope).
+    *   **TTS Manager (`tts_manager.py`):** Manages text-to-speech functionality, prioritizing CosyVoice (DashScope) and falling back to local system TTS.
 
-4.  **VLM Client (`qwen_vlm_client.py`):**
-    This is the dedicated interface to the external Qwen VLM. It formats the requests, sends the current image and prompt to the VLM API, and returns the model's response (the chosen action).
+4.  **PI0 Inference Integration:**
+    *   Located in `utils/run_pi0_inference.sh`, this script sets up a ROS2 environment to run PI0 policy inference for real-world UR5e control, using `openpi`.
 
-## Key Workflow & Discrepancy
-The system currently operates in a **"Half-Open-Loop"** mode:
-1. The planner gets a goal and the current image.
-2. It asks the VLM for the next single step.
-3. The executor performs that step.
-4. The system **assumes the action was successful** and immediately moves on to plan the next step based on the new state.
+## Key Workflow & State
+*   **Perception:** Captures real images via RealSense or simulated images via the Image Manager.
+*   **Planning:** VLM analyzes the image and task to decide the next action.
+*   **Execution:** Actions are dispatched to simulation or real hardware.
+*   **Location Tracking:** The system explicitly tracks robot locations (e.g., "Room 01" / "home", "Room 02" / "store") to provide context to the VLM.
 
-Notably, the documentation (`VLM_PLANNER_README.md`) describes a more advanced, fully **closed-loop** system that would visually verify the success of each action by comparing "before" and "after" images. The `qwen_vlm_client.py` even contains a `compare_images` function for this. However, this verification step is **not currently implemented** in the main planning loop of `humanoid_planner_vlm.py`, representing a key difference between the documented design and the current implementation.
+## Recent Findings & Enhancements
+*   **TTS Integration:** Added `utils/tts_manager.py` to enable speech for both robots, supporting "CosyVoice" (example requested by user) via DashScope SDK.
+*   **Real Hardware Support:** Transitioned from simulation-only to supporting real-world hardware (RealSense, UR5e via PI0).
+*   **Closed-Loop Readiness:** While still primarily "half-open-loop," the infrastructure for visual verification (capturing images after actions and VLM analysis) is now fully integrated into the executors.
+*   **Cooperative Model:** The system is designed for a humanoid robot to delegate tasks to a robotic arm, with the arm having its own VLM-based planning logic.

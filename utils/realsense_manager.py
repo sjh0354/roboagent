@@ -50,21 +50,43 @@ class RealSenseCameraManager:
             os.makedirs(self.output_dir)
 
         try:
-            # Start streaming
-            self.profile = self.pipeline.start(self.config)
-            
-            # Allow camera to warm up / auto-exposure to settle
-            if self.verbose:
-                print("📷 RealSense D435: Warming up (2s)...")
-            time.sleep(2.0)
-            
-            if self.verbose:
-                print("✅ RealSense D435 initialized successfully")
-                
+            self._start_pipeline()
         except Exception as e:
             if self.verbose:
-                print(f"❌ Failed to initialize RealSense camera: {str(e)}")
-            raise e
+                print(f"⚠️  Initial start failed: {e}. Attempting hardware reset...")
+            self._reset_device()
+            time.sleep(5.0) # Wait for device to re-enumerate
+            self._start_pipeline()
+
+    def _start_pipeline(self):
+        """Start the RealSense pipeline"""
+        # Start streaming
+        self.profile = self.pipeline.start(self.config)
+        
+        # Allow camera to warm up / auto-exposure to settle
+        if self.verbose:
+            print("📷 RealSense D435: Warming up (2s)...")
+        time.sleep(2.0)
+        
+        if self.verbose:
+            print("✅ RealSense D435 initialized successfully")
+
+    def _reset_device(self):
+        """Reset the first available RealSense device"""
+        try:
+            ctx = rs.context()
+            devices = ctx.query_devices()
+            if len(devices) > 0:
+                dev = devices[0]
+                if self.verbose:
+                    print(f"🔄 Resetting device: {dev.get_info(rs.camera_info.name)}")
+                dev.hardware_reset()
+            else:
+                if self.verbose:
+                    print("⚠️  No device found to reset")
+        except Exception as e:
+            if self.verbose:
+                print(f"❌ Failed to reset device: {e}")
 
     def capture_image(self, filename=None):
         """
@@ -76,43 +98,59 @@ class RealSenseCameraManager:
         Returns:
             str: Path to saved image file
         """
-        try:
-            # Wait for a coherent pair of frames: depth and color
-            frames = self.pipeline.wait_for_frames()
-            color_frame = frames.get_color_frame()
-            
-            if not color_frame:
-                if self.verbose:
-                    print("⚠️  RealSense: No color frame received")
-                return None
-
-            # Convert images to numpy arrays
-            color_image = np.asanyarray(color_frame.get_data())
-
-            # Generate filename if not provided
-            if filename is None:
-                # Use formatted timestamp: YYYYMMDD_HHMMSS_mmm
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
-                filename = f"observation_{timestamp}.jpg"
-            
-            # Ensure extension
-            if not filename.endswith(('.jpg', '.png', '.jpeg')):
-                filename += ".jpg"
-
-            save_path = os.path.join(self.output_dir, filename)
-
-            # Save image using OpenCV
-            cv2.imwrite(save_path, color_image)
-            
-            if self.verbose:
-                print(f"📸 Image captured: {save_path}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Wait for a coherent pair of frames: depth and color
+                # Increased timeout to 10000ms (10s)
+                frames = self.pipeline.wait_for_frames(timeout_ms=10000)
+                color_frame = frames.get_color_frame()
                 
-            return save_path
+                if not color_frame:
+                    if self.verbose:
+                        print("⚠️  RealSense: No color frame received")
+                    continue
 
-        except Exception as e:
-            if self.verbose:
-                print(f"❌ RealSense capture failed: {str(e)}")
-            return None
+                # Convert images to numpy arrays
+                color_image = np.asanyarray(color_frame.get_data())
+
+                # Generate filename if not provided
+                if filename is None:
+                    # Use formatted timestamp: YYYYMMDD_HHMMSS_mmm
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:19]
+                    filename = f"observation_{timestamp}.jpg"
+                
+                # Ensure extension
+                if not filename.endswith(('.jpg', '.png', '.jpeg')):
+                    filename += ".jpg"
+
+                save_path = os.path.join(self.output_dir, filename)
+
+                # Save image using OpenCV
+                cv2.imwrite(save_path, color_image)
+                
+                if self.verbose:
+                    print(f"📸 Image captured: {save_path}")
+                    
+                return save_path
+
+            except RuntimeError as e:
+                if "Frame didn't arrive" in str(e):
+                    if self.verbose:
+                        print(f"⚠️  Frame timeout (attempt {attempt+1}/{max_retries}). Retrying...")
+                    time.sleep(0.5)
+                else:
+                    if self.verbose:
+                        print(f"❌ RealSense runtime error: {str(e)}")
+                    return None
+            except Exception as e:
+                if self.verbose:
+                    print(f"❌ RealSense capture failed: {str(e)}")
+                return None
+        
+        if self.verbose:
+            print("❌ Failed to capture image after multiple attempts")
+        return None
 
     def close(self):
         """Stop streaming and close pipeline"""

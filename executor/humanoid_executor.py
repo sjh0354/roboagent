@@ -10,6 +10,11 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 import json
 
+try:
+    from utils.tts_manager import TTSManager
+except ImportError:
+    TTSManager = None
+
 
 class ExecutionResult:
     """Structured result from action execution"""
@@ -69,6 +74,15 @@ class HumanoidExecutor:
         self.execution_count = 0
         self.success_count = 0
         self.failure_count = 0
+
+        # Initialize TTS Manager
+        self.tts_manager = None
+        if TTSManager:
+            try:
+                self.tts_manager = TTSManager(verbose=verbose)
+            except Exception as e:
+                if verbose:
+                    print(f"⚠️  TTS Manager initialization failed: {e}")
 
         if not simulation_mode:
             self._initialize_hardware()
@@ -170,6 +184,14 @@ class HumanoidExecutor:
 
     def _speak(self, message: str) -> ExecutionResult:
         """Speak/communicate (unified action for all communication)"""
+        
+        # Trigger TTS if available
+        if self.tts_manager:
+            # Use threading to not block execution flow significantly, 
+            # or block=True if we want to ensure message is heard before continuing.
+            # Usually for 'speak', we want to hear it.
+            self.tts_manager.speak(message, model="cosyvoice-v1", block=False)
+
         if self.simulation_mode:
             # Simulation: just display the message
             print(f"🤖 Robot says: \"{message}\"")
@@ -191,12 +213,16 @@ class HumanoidExecutor:
                     data={"message": message, "recipient": "human"}
                 )
         else:
-            # TODO: Real implementation
-            # - Text-to-speech API for human
-            # - Network API for store robot
-            # - Smart routing based on message content
-            # self.robot_controller.speak(message)
-            raise NotImplementedError("Real TTS/communication not yet implemented")
+            # Real implementation
+            print(f"🗣️  Speaking: \"{message}\"")
+            if self.tts_manager:
+                self.tts_manager.speak(message, model="cosyvoice-v1", block=True)
+            
+            return ExecutionResult(
+                success=True,
+                feedback=f"Spoke message: '{message}'",
+                data={"message": message, "recipient": "human"}
+            )
 
     # ==================== TOOL Actions ====================
 

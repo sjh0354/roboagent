@@ -10,6 +10,11 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 import json
 
+try:
+    from utils.tts_manager import TTSManager
+except ImportError:
+    TTSManager = None
+
 class ExecutionResult:
     """Structured result from action execution"""
 
@@ -65,6 +70,15 @@ class ArmExecutor:
         self.execution_count = 0
         self.success_count = 0
         self.failure_count = 0
+
+        # Initialize TTS Manager
+        self.tts_manager = None
+        if TTSManager:
+            try:
+                self.tts_manager = TTSManager(verbose=verbose)
+            except Exception as e:
+                if verbose:
+                    print(f"⚠️  TTS Manager initialization failed: {e}")
 
         if not simulation_mode:
             self._initialize_hardware()
@@ -151,6 +165,11 @@ class ArmExecutor:
 
     def _speak(self, message: str) -> ExecutionResult:
         """Speak/communicate (send status to humanoid)"""
+        
+        # Trigger TTS
+        if self.tts_manager:
+            self.tts_manager.speak(message, model="cosyvoice-v1", block=False)
+            
         if self.simulation_mode:
             print(f"🦾 Arm says: \"{message}\"")
             return ExecutionResult(
@@ -159,8 +178,13 @@ class ArmExecutor:
                 data={"message": message, "recipient": "humanoid"}
             )
         else:
-            # TODO: Real implementation (network call to humanoid)
-            raise NotImplementedError("Real communication not yet implemented")
+            # Real implementation
+            print(f"🗣️  Arm Speaking: \"{message}\"")
+            return ExecutionResult(
+                success=True,
+                feedback=f"Message spoken: '{message}'",
+                data={"message": message}
+            )
 
     # ==================== ACT Actions ====================
 
