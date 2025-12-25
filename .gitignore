@@ -7,9 +7,11 @@
 
 # API Keys and secrets
 apikey.bash
+apikey.sh
 api_key.*
 secrets.*
 .env.api
+captured_images/
 
 # Python
 __pycache__/

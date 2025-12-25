@@ -109,7 +109,7 @@ class VisionEnabledArmExecutor(ArmExecutor):
                 item_name = parameters.get("item_name", "item")
                 source = parameters.get("source", "shelf")
                 target = parameters.get("target", "counter")
-                instruction = f"Pick the {item_name} from the {source} and place it on the {target}."
+                instruction = f"Move the {item_name} into the {target}."
             
             if instruction:
                 base_result = self._execute_pi0_script(instruction)
@@ -166,8 +166,9 @@ class VisionEnabledArmExecutor(ArmExecutor):
         """
         try:
             # Get script path: parent_of_executor/utils/run_pi0_inference.sh
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            script_path = os.path.join(base_dir, "utils", "run_pi0_inference.sh")
+            #base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            base_dir = "/home/ef/projects/ur5e-arm-teleoperation"
+            script_path = os.path.join(base_dir, "run_pi0_inference.sh")
             
             if not os.path.exists(script_path):
                 return ExecutionResult(False, f"Script not found: {script_path}", error="FileNotFound")

@@ -11,10 +11,13 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
+import time
 from datetime import datetime
 from typing import Dict, Optional
 from openai import OpenAI
 
+from executor.arm_executor_vision import VisionEnabledArmExecutor
+from utils.realsense_manager import RealSenseCameraManager
 from template.arm_prompt_template_vlm import (
     get_arm_vlm_system_prompt,
     get_arm_vlm_config,
@@ -39,7 +42,7 @@ class AutonomousArmVLMPlanner:
     def __init__(self,
                  api_key: Optional[str] = None,
                  model_name: str = "qwen-vl-plus",
-                 simulation_mode: bool = True,
+                 simulation_mode: bool = False,
                  verbose: bool = True):
         """
         Initialize VLM-based autonomous arm planner
@@ -61,6 +64,16 @@ class AutonomousArmVLMPlanner:
         self.config = get_arm_vlm_config(model_name)
         self.verbose = verbose
         self.simulation_mode = simulation_mode
+        self.camera_manager = None
+
+        if not self.simulation_mode:
+            try:
+                self.camera_manager = RealSenseCameraManager(verbose=verbose)
+            except Exception as e:
+                if self.verbose:
+                    print(f"⚠️  Camera initialization failed: {e}")
+                    print("   Switching to simulation mode")
+                self.simulation_mode = True
 
         # Initialize OpenAI client (for VLM API)
         self.client = OpenAI(
@@ -76,6 +89,14 @@ class AutonomousArmVLMPlanner:
             api_key=self.api_key,
             model_name=model_name,
             verbose=verbose
+        )
+        
+        # Initialize Executor
+        self.executor = VisionEnabledArmExecutor(
+            simulation_mode=self.simulation_mode,
+            verbose=verbose,
+            enable_vision=True,
+            vlm_model=model_name
         )
 
         # Conversation state
@@ -132,12 +153,27 @@ class AutonomousArmVLMPlanner:
 
     def _get_default_observation_image(self) -> str:
         """Get default observation image for store workspace"""
+        # Delegate to executor if possible
+        if hasattr(self, 'executor'):
+             obs = self.executor.get_current_observation()
+             if obs.get('image_path'):
+                 return obs['image_path']
+
         if self.simulation_mode:
             # For simulation, use default store image
             return "simulation_images/store/default.jpg"
+        elif self.camera_manager:
+            # For real mode, capture from camera
+            img_path = self.camera_manager.capture_image()
+            if img_path:
+                return img_path
+            else:
+                if self.verbose:
+                    print("⚠️  Capture failed, using simulation default")
+                return "simulation_images/store/default.jpg"
         else:
-            # For real mode, would capture from camera
-            raise NotImplementedError("Real camera capture not yet implemented")
+            # Fallback
+            return "simulation_images/store/default.jpg"
 
     def _run_autonomous_loop(self) -> Dict:
         """
@@ -178,7 +214,7 @@ class AutonomousArmVLMPlanner:
                 return step_plan
 
             # Execute step (assumed successful, no verification)
-            self._execute_step_simulation(step_plan)
+            self._execute_step(step_plan)
 
         # Loop complete
         if self.is_task_complete:
@@ -316,9 +352,69 @@ class AutonomousArmVLMPlanner:
         """
         return self.plan_next_step_with_image(self.current_observation_image)
 
+    def _execute_step(self, step_plan: Dict):
+        """
+        Execute step, dispatching based on simulation mode.
+
+        Args:
+            step_plan: Step plan from VLM planner
+        """
+        if self.simulation_mode:
+            self._execute_step_simulation(step_plan)
+        else:
+            self._execute_step_real(step_plan)
+
+    def _execute_step_real(self, step_plan: Dict):
+        """Execute step using Executor on real hardware"""
+        if "error" in step_plan or step_plan.get("next_step") is None:
+            return
+
+        next_step = step_plan["next_step"]
+
+        # Record in execution history
+        self.execution_history.append({
+            "step_number": next_step.get("step_number"),
+            "action": next_step.get("action"),
+            "parameters": next_step.get("parameters"),
+            "timestamp": datetime.now().isoformat()
+        })
+
+        self.step_count += 1
+
+        if self.verbose:
+            print("\n" + "="*70)
+            print(f"⚡ EXECUTING STEP {next_step.get('step_number')} (Real Hardware)")
+            print("="*70)
+            print(f"🎯 Action: {next_step.get('action')}")
+            print(f"📦 Parameters: {json.dumps(next_step.get('parameters', {}), indent=2)}")
+            print("="*70 + "\n")
+
+        # Execute via Executor
+        result = self.executor.execute_action(
+            next_step.get("action_type"),
+            next_step.get("action"),
+            next_step.get("parameters", {})
+        )
+        
+        # Update observation image based on result
+        if result.data.get("observation_image"):
+             self.current_observation_image = result.data.get("observation_image")
+
+        # Mark as assumed successful (half-open loop)
+        self.execution_history[-1]["assumed_successful"] = True
+        self.execution_history[-1]["execution_result"] = result.to_dict()
+
+        if self.verbose:
+            print(f"\n{'='*70}")
+            print(f"📊 EXECUTION STATUS:")
+            print(f"{'='*70}")
+            print(f"✓ Action executed on hardware")
+            print(f"→ Continuing to next step...")
+            print(f"{'='*70}\n")
+
     def _execute_step_simulation(self, step_plan: Dict):
         """
-        Simulate step execution (Half-Open-Loop: Assumed Successful)
+        Simulate step execution (Internal Planner Simulation Logic)
 
         Args:
             step_plan: Step plan from VLM planner
@@ -341,7 +437,7 @@ class AutonomousArmVLMPlanner:
         # Display execution header
         if self.verbose:
             print("\n" + "="*70)
-            print(f"⚡ EXECUTING STEP {next_step.get('step_number')} (Half-Open-Loop)")
+            print(f"⚡ EXECUTING STEP {next_step.get('step_number')} (Simulation Mode)")
             print("="*70)
             print(f"🎯 Action: {next_step.get('action')}")
             print(f"📦 Parameters: {json.dumps(next_step.get('parameters', {}), indent=2)}")
@@ -496,7 +592,7 @@ def main():
         # Initialize planner
         planner = AutonomousArmVLMPlanner(
             model_name="qwen-vl-plus",
-            simulation_mode=True,
+            simulation_mode=False,
             verbose=True
         )
 

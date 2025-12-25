@@ -76,7 +76,7 @@ class ArmExecutor:
     def _initialize_hardware(self):
         """Initialize connections to real hardware/APIs"""
         # TODO: Initialize real hardware connections (e.g., RTDE for UR5e)
-        print("⚠️  Arm hardware initialization not yet implemented")
+        # print("⚠️  Arm hardware initialization not yet implemented")
 
     def execute_action(self, action_type: str, action_name: str, parameters: Dict[str, Any]) -> ExecutionResult:
         """
