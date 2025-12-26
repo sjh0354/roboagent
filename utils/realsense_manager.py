@@ -21,17 +21,19 @@ class RealSenseCameraManager:
     Manages connection and capture from RealSense D435 camera
     """
 
-    def __init__(self, width=640, height=480, fps=30, verbose=True):
+    def __init__(self, serial_no="346222072679", width=640, height=480, fps=30, verbose=True):
         """
         Initialize RealSense pipeline
         
         Args:
+            serial_no: Serial number of the camera to use (optional)
             width: Image width
             height: Image height
             fps: Frames per second
             verbose: Print status messages
         """
         self.verbose = verbose
+        self.serial_no = serial_no
         self.output_dir = "captured_images"
         
         if rs is None:
@@ -39,6 +41,11 @@ class RealSenseCameraManager:
 
         self.pipeline = rs.pipeline()
         self.config = rs.config()
+
+        if self.serial_no:
+            if self.verbose:
+                print(f"📷 Configuring RealSense with serial number: {self.serial_no}")
+            self.config.enable_device(self.serial_no)
 
         # Enable color stream
         self.config.enable_stream(rs.stream.color, width, height, rs.format.bgr8, fps)

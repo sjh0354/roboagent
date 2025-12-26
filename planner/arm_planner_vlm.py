@@ -175,6 +175,10 @@ class AutonomousArmVLMPlanner:
                 return step_plan
 
             if step_plan.get("needs_human_input"):
+                # If there is an action associated (e.g. speak), execute it first so the user hears/sees it
+                if step_plan.get("next_step"):
+                     self._execute_step(step_plan)
+
                 # Pause for humanoid clarification
                 self.waiting_for_humanoid = True
                 self.humanoid_question = step_plan.get("humanoid_question")

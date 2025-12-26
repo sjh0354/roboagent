@@ -8,6 +8,8 @@
 #pip install -e .
 # conda activate openpi
 
+export ROS_DOMAIN_ID=131
+
 # Start a new detached tmux session named 'tmp'
 tmux new-session -d -s tmp
 tmux split-window -h -t tmp:0.0
@@ -31,7 +33,7 @@ POLICY_PORT="${POLICY_PORT:-8000}"
 ROBOT_IP="${ROBOT_IP:-192.168.24.245}"
 ROBOT_NAME="${ROBOT_NAME:-arm_1}"
 USE_REAL_ROBOT="${USE_REAL_ROBOT:-true}"
-INSTRUCTION="${INSTRUCTION:-Move the medicine box into the basket.}"
+INSTRUCTION="${INSTRUCTION:-Move the middle medicine box into the basket.}"
 
 echo "Policy server: $POLICY_HOST:$POLICY_PORT"
 echo "Robot IP: $ROBOT_IP"
@@ -43,7 +45,7 @@ cd $script_dir
 
 #colcon build
 
-tmux send-keys -t tmp:0.0 "cd $script_dir && rm -rf build install log && colcon build" C-m
+tmux send-keys -t tmp:0.0 "export ROS_DOMAIN_ID=131 && source /opt/ros/humble/setup.bash && cd $script_dir && rm -rf build install log && colcon build" C-m
 while true; do
     pane_0_0=$(tmux capture-pane -pt tmp:0.0)
     if echo "$pane_0_0" | grep -q "Summary:"; then
@@ -57,12 +59,16 @@ sleep 1
 echo "Launching the camera nodes..."
 # Terminal 0.0: Camera nodes
 tmux send-keys -t tmp:0.0 "cd $script_dir && \
+                            export ROS_DOMAIN_ID=131 && \
+                            source /opt/ros/humble/setup.bash && \
                             source ./install/setup.bash && \
                             ros2 launch ur5e_teleopration v4l2_camera.launch.py robot_name:=ur5e" C-m
 
 echo "Launching the UR5e Robot node..."
 # Terminal 0.1: UR5e Robot node
 tmux send-keys -t tmp:0.1 "cd $script_dir && \
+                            export ROS_DOMAIN_ID=131 && \
+                            source /opt/ros/humble/setup.bash && \
                             source ./install/setup.bash && \
                             ros2 launch ur5e_teleopration ur5e_single_arm.launch.py \
                             robot_name:=$ROBOT_NAME \
@@ -70,12 +76,15 @@ tmux send-keys -t tmp:0.1 "cd $script_dir && \
                             use_real_robot:=$USE_REAL_ROBOT" C-m
 
 tmux send-keys -t tmp:0.2 "conda activate openpi && \
-                            pip install cv2 && \
-                            pip install typing_extension" C-m
+                            pip install \"opencv-python<4.10\" && \
+                            pip install typing_extensions && \
+                            pip install \"numpy<2\"" C-m
 
 echo "Launching the PI0 UR5e control node..."
 # Terminal 0.2: PI0 UR5e control node
 tmux send-keys -t tmp:0.2 "cd $script_dir && \
+                            export ROS_DOMAIN_ID=131 && \
+                            source /opt/ros/humble/setup.bash && \
                             source ./install/setup.bash && \
                             ros2 launch ur5e_teleopration pi0_ur5e.launch.py \
                             policy_host:=$POLICY_HOST \

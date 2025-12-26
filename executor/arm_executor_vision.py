@@ -110,6 +110,12 @@ class VisionEnabledArmExecutor(ArmExecutor):
                 source = parameters.get("source", "shelf")
                 target = parameters.get("target", "counter")
                 instruction = f"Move the {item_name} into the {target}."
+            elif action_name == "pick_from_shelf":
+                 item_name = parameters.get("item_name", "item")
+                 instruction = f"Pick the {item_name} from the shelf."
+            elif action_name == "place_on_counter":
+                 item_name = parameters.get("item_name", "item")
+                 instruction = f"Place the {item_name} on the counter."
             
             if instruction:
                 base_result = self._execute_pi0_script(instruction)
@@ -162,38 +168,82 @@ class VisionEnabledArmExecutor(ArmExecutor):
     
     def _execute_pi0_script(self, instruction: str) -> ExecutionResult:
         """
-        Execute PI0 inference script with instruction using subprocess
+        Execute PI0 inference script with instruction using subprocess inside Docker
         """
+        base_dir = "/home/ef/projects/ur5e-arm-teleoperation"
+        docker_dir = os.path.join(base_dir, "docker")
+        container_name = "exp_ef_ur5e-arm-teleopration"
+        script_in_docker = "/home/ef/projects/ur5e-arm-teleoperation/run_pi0_inference.sh"
+        kill_script_in_docker = "/home/ef/projects/ur5e-arm-teleoperation/kill_project.sh"
+
         try:
-            # Get script path: parent_of_executor/utils/run_pi0_inference.sh
-            #base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            base_dir = "/home/ef/projects/ur5e-arm-teleoperation"
-            script_path = os.path.join(base_dir, "run_pi0_inference.sh")
-            
-            if not os.path.exists(script_path):
-                return ExecutionResult(False, f"Script not found: {script_path}", error="FileNotFound")
-            
             if self.verbose:
-                print(f"🚀 Launching PI0 inference script: {script_path}")
+                print(f"🚀 Launching PI0 inference in Docker...")
                 print(f"   Instruction: {instruction}")
 
-            # Prepare environment variables
+            # Prepare environment variables for make command
             env = os.environ.copy()
             env["INSTRUCTION"] = instruction
             
-            # Execute script
-            # The script uses tmux -d, so it should return relatively quickly
-            subprocess.run(["bash", script_path], env=env, check=True)
+            # 1. Run make in docker dir to ensure container is running
+            if self.verbose:
+                print(f"   Starting/Checking Docker container in {docker_dir}...")
+            subprocess.run(["make", "_instantiate_container"], cwd=docker_dir, env=env, check=True)
+            
+            # 2. Run inference script INSIDE Docker
+            # Command: docker exec -u 1002 -e INSTRUCTION="..." -w ... <container> ./run_pi0_inference.sh
+            cmd = [
+                "docker", "exec",
+                "-e", f"INSTRUCTION={instruction}",
+                "-u", "1002",
+                "-w", "/home/ef/projects/ur5e-arm-teleoperation",
+                container_name,
+                "./run_pi0_inference.sh"
+            ]
+            
+            if self.verbose:
+                print(f"   Running inside Docker: {' '.join(cmd)}")
+            
+            subprocess.run(cmd, check=True)
+            
+            # 3. Wait for action to complete (since script is non-blocking tmux)
+            wait_time = 60
+            if self.verbose:
+                print(f"   ⏳ Waiting {wait_time}s for robot action to complete...")
+            time.sleep(wait_time)
             
             return ExecutionResult(
                 success=True,
-                feedback=f"Launched PI0 inference with instruction: '{instruction}'",
-                data={"instruction": instruction, "script": script_path}
+                feedback=f"Executed PI0 inference with instruction: '{instruction}'",
+                data={"instruction": instruction}
             )
+
         except subprocess.CalledProcessError as e:
             return ExecutionResult(False, f"Script execution failed", error=str(e))
         except Exception as e:
-            return ExecutionResult(False, f"Failed to launch script", error=str(e))
+            return ExecutionResult(False, f"Failed to execute script", error=str(e))
+        finally:
+            # 4. Cleanup INSIDE Docker
+            if self.verbose:
+                print(f"   Cleaning up processes inside Docker...")
+            
+            cleanup_cmd = [
+                "docker", "exec",
+                "-u", "1002",
+                "-w", "/home/ef/projects/ur5e-arm-teleoperation",
+                container_name,
+                "./kill_project.sh"
+            ]
+            
+            try:
+                subprocess.run(cleanup_cmd, check=False)
+            except Exception as e:
+                print(f"Error during cleanup: {e}")
+            
+            # 5. Stop Docker container (optional, maybe keep it running for speed?)
+            # Keeping it running is faster for subsequent commands. 
+            # If we want to strictly stop it:
+            # subprocess.run(["make", "kill"], cwd=docker_dir, check=False)
 
     def get_current_observation(self) -> Dict[str, Any]:
         """
