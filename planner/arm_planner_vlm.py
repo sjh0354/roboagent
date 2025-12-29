@@ -26,6 +26,7 @@ from template.arm_prompt_template_vlm import (
     list_available_vlm_models
 )
 from utils.qwen_vlm_client import QwenVLMClient
+from utils.asr_manager import ASRManager
 
 
 class AutonomousArmVLMPlanner:
@@ -579,11 +580,14 @@ def main():
             verbose=True
         )
 
+        # Initialize ASR
+        asr = ASRManager(verbose=True)
+
         print("\n" + "="*70)
         print("🎮 AUTONOMOUS ARM VLM PLANNER - Ready")
         print("="*70)
         print("📋 Commands:")
-        print("  - Enter request from humanoid robot")
+        print("  - Enter request from humanoid robot (or 'mic' for voice)")
         print("  - 'models' or 'm': List available VLM models")
         print("  - 'switch <model>': Switch VLM model")
         print("  - 'status' or 's': Show task status")
@@ -592,10 +596,25 @@ def main():
         print("="*70)
 
         while True:
-            user_input = input("\n🦾 Enter humanoid request > ").strip()
+            user_input = input("\n🦾 Enter humanoid request (or 'mic' for voice) > ").strip()
 
             if not user_input:
                 continue
+
+            # Handle voice input
+            if user_input.lower() in ['mic', 'voice']:
+                print("\n🎙️ Listening for instruction...")
+                user_input = asr.listen_and_transcribe(duration=5.0)
+                print(f"📝 Transcribed: {user_input}")
+                
+                if user_input.startswith("Error"):
+                    continue
+                
+                # Ask for confirmation
+                confirm = input("Confirm? (y/n) > ").strip().lower()
+                if confirm != 'y':
+                    print("❌ Cancelled.")
+                    continue
 
             # Handle commands
             if user_input.lower() in ['quit', 'q']:
@@ -627,8 +646,21 @@ def main():
 
             # Handle result
             if result.get("status") == "waiting_for_humanoid":
-                response = input(f"\n❓ {result['question']}\nYour response > ").strip()
-                result = planner.provide_humanoid_response(response)
+                response = input(f"\n❓ {result['question']}\nYour response (or 'mic') > ").strip()
+                
+                # Handle voice response
+                if response.lower() in ['mic', 'voice']:
+                    print("\n🎙️ Listening for response...")
+                    response = asr.listen_and_transcribe(duration=5.0)
+                    print(f"📝 Transcribed: {response}")
+                    
+                    if not response.startswith("Error"):
+                         if input("Confirm? (y/n) > ").strip().lower() == 'y':
+                             result = planner.provide_humanoid_response(response)
+                    else:
+                        print("❌ Voice input failed.")
+                else:
+                    result = planner.provide_humanoid_response(response)
 
             # Show final result
             if result.get("is_complete"):

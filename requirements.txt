@@ -6,3 +6,5 @@ pyrealsense2
 requests
 dashscope
 scipy
+sounddevice
+qwen3-asr-toolkit

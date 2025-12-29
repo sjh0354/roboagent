@@ -207,7 +207,7 @@ class VisionEnabledArmExecutor(ArmExecutor):
             subprocess.run(cmd, check=True)
             
             # 3. Wait for action to complete (since script is non-blocking tmux)
-            wait_time = 60
+            wait_time = 90
             if self.verbose:
                 print(f"   ⏳ Waiting {wait_time}s for robot action to complete...")
             time.sleep(wait_time)
