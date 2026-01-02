@@ -609,12 +609,6 @@ def main():
                 
                 if user_input.startswith("Error"):
                     continue
-                
-                # Ask for confirmation
-                confirm = input("Confirm? (y/n) > ").strip().lower()
-                if confirm != 'y':
-                    print("❌ Cancelled.")
-                    continue
 
             # Handle commands
             if user_input.lower() in ['quit', 'q']:
@@ -655,8 +649,7 @@ def main():
                     print(f"📝 Transcribed: {response}")
                     
                     if not response.startswith("Error"):
-                         if input("Confirm? (y/n) > ").strip().lower() == 'y':
-                             result = planner.provide_humanoid_response(response)
+                        result = planner.provide_humanoid_response(response)
                     else:
                         print("❌ Voice input failed.")
                 else:
