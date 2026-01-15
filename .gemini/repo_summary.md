@@ -22,7 +22,8 @@ The system employs a perceive-plan-act cycle, with a clear separation of concern
 3.  **Hardware & Vision Management:**
     *   **VLM Client (`utils/qwen_vlm_client.py`):** Provides the direct interface to the Qwen Vision-Language Model, with `compare_images` being central to autonomous action verification.
     *   **Simulation Image Manager (`utils/simulation_image_manager.py`):** Essential for the 'simulation-first' design. It provides appropriate environmental images to the VLM based on a simulated world state (e.g., location, device status), enabling realistic, vision-based planning and execution without real hardware.
-    *   **RealSense Manager (`realsense_manager.py`):** Handles image capture from Intel RealSense D435 cameras for real-world robot vision.
+    *   **RealSense Manager (`realsense_manager.py`):** Handles image capture from Intel RealSense D435 cameras for vision of robot arm planner.
+    *   **Dabai Camera Manager (`dabai_camera_manager.py`):** Handles image capture from DaBai Max Pro cameras for vision of Humaniod robot planner.
     *   **TTS Manager (`tts_manager.py`):** Manages text-to-speech functionality, prioritizing CosyVoice (DashScope) and falling back to local system TTS.
 
 4.  **Prompt Engineering:**

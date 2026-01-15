@@ -6,6 +6,7 @@ Executes planned actions on real Unitree-G1 robot
 """
 
 import time
+import subprocess
 from datetime import datetime
 from typing import Dict, Any, Optional
 import json
@@ -54,16 +55,18 @@ class HumanoidExecutor:
     - Perception (sense)
     """
 
-    def __init__(self, simulation_mode=True, verbose=True):
+    def __init__(self, simulation_mode=True, verbose=True, volume=1.0):
         """
         Initialize humanoid executor
 
         Args:
             simulation_mode: If True, simulate actions; if False, execute on real hardware
             verbose: Print execution details
+            volume: TTS playback volume (0.0 to 1.0)
         """
         self.simulation_mode = simulation_mode
         self.verbose = verbose
+        self.volume = volume
 
         # Hardware/API clients will be initialized here
         self.robot_controller = None
@@ -79,7 +82,7 @@ class HumanoidExecutor:
         self.tts_manager = None
         if TTSManager:
             try:
-                self.tts_manager = TTSManager(verbose=verbose)
+                self.tts_manager = TTSManager(verbose=verbose, volume=volume)
             except Exception as e:
                 if verbose:
                     print(f"⚠️  TTS Manager initialization failed: {e}")
@@ -384,8 +387,30 @@ class HumanoidExecutor:
                 data={"picked_object": object_description}
             )
         else:
-            # TODO: Real implementation
-            raise NotImplementedError("Real pick not yet implemented")
+            # Real implementation using ROS2 commands from guide
+            if self.verbose:
+                print(f"🚀 Executing REAL pick for: {object_description}")
+            
+            try:
+                # Commands from humaniod_execution_guide.md:
+                # cd /home/peanut/sc_ros
+                # source install/setup.bash
+                # ros2 run sc_ros2 pick
+                cmd = "source /home/peanut/sc_ros/install/setup.bash && ros2 run sc_ros2 pick"
+                
+                subprocess.run(cmd, shell=True, executable='/bin/bash', check=True)
+                
+                return ExecutionResult(
+                    success=True,
+                    feedback=f"Real pick executed successfully for {object_description}",
+                    data={"picked_object": object_description}
+                )
+            except subprocess.CalledProcessError as e:
+                return ExecutionResult(
+                    success=False,
+                    feedback="Real pick failed",
+                    error=str(e)
+                )
 
     def _place(self, receptacle_description: str, spatial_relationship: str) -> ExecutionResult:
         """
@@ -407,8 +432,33 @@ class HumanoidExecutor:
                 }
             )
         else:
-            # TODO: Real implementation
-            raise NotImplementedError("Real place not yet implemented")
+            # Real implementation using ROS2 commands from guide
+            if self.verbose:
+                print(f"🚀 Executing REAL place: {spatial_relationship} {receptacle_description}")
+            
+            try:
+                # Commands from humaniod_execution_guide.md:
+                # cd /home/peanut/sc_ros
+                # source install/setup.bash
+                # ros2 run sc_ros2 place
+                cmd = "source /home/peanut/sc_ros/install/setup.bash && ros2 run sc_ros2 place"
+                
+                subprocess.run(cmd, shell=True, executable='/bin/bash', check=True)
+                
+                return ExecutionResult(
+                    success=True,
+                    feedback=f"Real place executed successfully {spatial_relationship} {receptacle_description}",
+                    data={
+                        "receptacle": receptacle_description,
+                        "relationship": spatial_relationship
+                    }
+                )
+            except subprocess.CalledProcessError as e:
+                return ExecutionResult(
+                    success=False,
+                    feedback="Real place failed",
+                    error=str(e)
+                )
 
     def _navigate_to(self, target_location: str, with_item: str) -> ExecutionResult:
         """

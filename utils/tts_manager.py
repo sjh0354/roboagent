@@ -29,16 +29,18 @@ class TTSManager:
     Manages Text-to-Speech synthesis
     """
 
-    def __init__(self, verbose: bool = True, preferred_backend: str = "auto"):
+    def __init__(self, verbose: bool = True, preferred_backend: str = "auto", volume: float = 1.0):
         """
         Initialize TTS Manager
 
         Args:
             verbose: Print status messages
             preferred_backend: 'dashscope', 'system', or 'auto'
+            volume: Default playback volume (0.0 to 1.0)
         """
         self.verbose = verbose
         self.preferred_backend = preferred_backend
+        self.volume = max(0.0, min(1.0, volume)) # Clamp between 0.0 and 1.0
         
         # Check API key for DashScope
         self.api_key = os.getenv("DASHSCOPE_API_KEY")
@@ -52,6 +54,7 @@ class TTSManager:
         print(f"   - DashScope SDK: {'✅ Available' if DASHSCOPE_AVAILABLE else '❌ Not installed (pip install dashscope)'}")
         print(f"   - API Key: {'✅ Found' if self.api_key else '❌ Not found (DASHSCOPE_API_KEY)'}")
         print(f"   - System TTS: {'✅ Available (espeak)' if self._check_espeak() else '⚠️ Not found'}")
+        print(f"   - Volume: {int(self.volume * 100)}%")
 
     def _check_espeak(self) -> bool:
         """Check if espeak is available"""
@@ -61,7 +64,7 @@ class TTSManager:
         except subprocess.CalledProcessError:
             return False
 
-    def speak(self, text: str, model: str = "cosyvoice-v1", block: bool = False):
+    def speak(self, text: str, model: str = "cosyvoice-v1", block: bool = False, volume: Optional[float] = None):
         """
         Speak the given text
 
@@ -69,20 +72,24 @@ class TTSManager:
             text: Text to speak
             model: Model name for DashScope (e.g., 'cosyvoice-v1', 'sambert-zh-v1')
             block: If True, wait for speech to finish (not fully supported for all backends)
+            volume: Override default volume (0.0 to 1.0), if None use self.volume
         """
         if not text:
             return
+
+        # Determine volume
+        current_volume = self.volume if volume is None else max(0.0, min(1.0, volume))
 
         # Determine backend
         backend = self._choose_backend()
         
         if self.verbose:
-            print(f"🗣️  Speaking ({backend}): \"{text}\"")
+            print(f"🗣️  Speaking ({backend}, vol={current_volume:.1f}): \"{text}\"")
 
         if backend == "dashscope":
-            self._speak_dashscope(text, model, block)
+            self._speak_dashscope(text, model, block, current_volume)
         elif backend == "system":
-            self._speak_system(text, block)
+            self._speak_system(text, block, current_volume)
         else:
             self._speak_mock(text)
 
@@ -101,12 +108,12 @@ class TTSManager:
         else:
             return "mock"
 
-    def _speak_dashscope(self, text: str, model: str, block: bool):
+    def _speak_dashscope(self, text: str, model: str, block: bool, volume: float):
         """Speak using DashScope API (CosyVoice)"""
         if not DASHSCOPE_AVAILABLE:
             if self.verbose:
                 print("⚠️  DashScope SDK not installed. Falling back to system.")
-            self._speak_system(text, block)
+            self._speak_system(text, block, volume)
             return
 
         def _run():
@@ -129,7 +136,7 @@ class TTSManager:
                     with open(filename, 'wb') as f:
                         f.write(response)
                     
-                    self._play_audio(filename)
+                    self._play_audio(filename, volume)
                     
                     if os.path.exists(filename):
                         os.remove(filename)
@@ -146,7 +153,7 @@ class TTSManager:
                              # Fallback, maybe response itself is iterable?
                              f.write(response.content if hasattr(response, 'content') else b'')
 
-                    self._play_audio(filename)
+                    self._play_audio(filename, volume)
                     
                     if os.path.exists(filename):
                         os.remove(filename)
@@ -155,24 +162,29 @@ class TTSManager:
                          msg = response.message if hasattr(response, 'message') else str(response)
                          print(f"❌ DashScope TTS API Error: {msg}")
                     # Fallback
-                    self._speak_system(text, block=True)
+                    self._speak_system(text, block=True, volume=volume)
 
             except Exception as e:
                 if self.verbose:
                     print(f"❌ DashScope TTS Exception: {str(e)}. Falling back to system.")
-                self._speak_system(text, block=True)
+                self._speak_system(text, block=True, volume=volume)
 
         if block:
             _run()
         else:
             threading.Thread(target=_run).start()
 
-    def _speak_system(self, text: str, block: bool):
+    def _speak_system(self, text: str, block: bool, volume: float):
         """Speak using system espeak"""
         def _run():
             try:
                 # Use espeak
-                subprocess.run(["espeak", text], check=True)
+                # -a amplitude: 0 to 200, default is 100. We map 0-1.0 to 0-200, or just 0-100?
+                # espeak docs say: "Amplitude, 0 to 200, default is 100"
+                # Let's map 1.0 -> 100 to be safe/standard, or 200 for boost?
+                # Sticking to 1.0 -> 100 for now.
+                amplitude = int(volume * 100)
+                subprocess.run(["espeak", "-a", str(amplitude), text], check=True)
             except Exception as e:
                 if self.verbose:
                     print(f"❌ System TTS failed: {e}")
@@ -187,21 +199,31 @@ class TTSManager:
         # Already printed in speak()
         pass
 
-    def _play_audio(self, filename: str):
-        """Play audio file using system player"""
+    def _play_audio(self, filename: str, volume: float):
+        """Play audio file using system player with volume control"""
         try:
-            # Try aplay (linux, wav only)
+            # Try ffplay (cross-platform, requires ffmpeg, good volume control)
+            if subprocess.run(["which", "ffplay"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
+                # -af volume=... (float)
+                subprocess.run(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", "-af", f"volume={volume}", filename], check=True)
+                return
+
+            # Try paplay (PulseAudio - common on Ubuntu Desktop)
+            if subprocess.run(["which", "paplay"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
+                # --volume=VOLUME (0=muted, 65536=100%)
+                pa_volume = int(volume * 65536)
+                subprocess.run(["paplay", "--volume", str(pa_volume), filename], check=True)
+                return
+
+            # Try aplay (ALSA - linux, wav only)
             if subprocess.run(["which", "aplay"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
+                if self.verbose and volume != 1.0:
+                    print("⚠️  aplay does not support direct volume control. Playing at system volume.")
                 subprocess.run(["aplay", "-q", filename], check=True)
                 return
             
-            # Try ffplay
-            if subprocess.run(["which", "ffplay"], stdout=subprocess.DEVNULL, check=False).returncode == 0:
-                subprocess.run(["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", filename], check=True)
-                return
-
             if self.verbose:
-                print(f"⚠️  No audio player (aplay/ffplay) found. Saved to {filename}")
+                print(f"⚠️  No audio player (ffplay/paplay/aplay) found. Saved to {filename}")
         except Exception as e:
             if self.verbose:
                 print(f"❌ Audio playback failed: {e}")
@@ -209,5 +231,6 @@ class TTSManager:
 # Example usage
 if __name__ == "__main__":
     # Test
-    manager = TTSManager(verbose=True)
-    manager.speak("你好，你好，可以听到我说话吗？", block=True)
+    manager = TTSManager(verbose=True, volume=0.8)
+    manager.speak("你好，我现在的音量是百分之八十。", block=True)
+    manager.speak("Checking volume fifty percent.", volume=0.5, block=True)

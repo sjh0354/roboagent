@@ -42,7 +42,8 @@ class AutonomousVLMPlanner:
                  api_key: Optional[str] = None,
                  model_name: str = "qwen-vl-plus",
                  simulation_mode: bool = True,
-                 verbose: bool = True):
+                 verbose: bool = True,
+                 volume: float = 1.0):
         """
         Initialize VLM-based autonomous planner
 
@@ -51,6 +52,7 @@ class AutonomousVLMPlanner:
             model_name: VLM model name (qwen-vl-plus, qwen-vl-max)
             simulation_mode: Use simulation images (True) or real camera (False)
             verbose: Print detailed logs
+            volume: TTS playback volume (0.0 to 1.0)
         """
         # Get API key
         self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
@@ -84,7 +86,8 @@ class AutonomousVLMPlanner:
             simulation_mode=simulation_mode,
             verbose=verbose,
             enable_vision=True,
-            vlm_model=model_name
+            vlm_model=model_name,
+            volume=volume
         )
 
         # Conversation state
@@ -93,6 +96,7 @@ class AutonomousVLMPlanner:
         if verbose:
             print(f"✅ AutonomousVLMPlanner initialized with model: {self.config['model']}")
             print(f"   Simulation mode: {simulation_mode}")
+            print(f"   Volume: {int(volume * 100)}%")
 
     def reset_conversation(self):
         """Reset conversation state for new task"""

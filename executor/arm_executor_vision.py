@@ -29,7 +29,8 @@ class VisionEnabledArmExecutor(ArmExecutor):
                  simulation_mode: bool = True,
                  verbose: bool = True,
                  enable_vision: bool = True,
-                 vlm_model: str = "qwen-vl-plus"):
+                 vlm_model: str = "qwen-vl-plus",
+                 volume: float = 1.0):
         """
         Initialize vision-enabled arm executor
 
@@ -38,9 +39,10 @@ class VisionEnabledArmExecutor(ArmExecutor):
             verbose: Print execution details
             enable_vision: Enable vision-based observation
             vlm_model: VLM model to use (qwen-vl-plus, qwen-vl-max)
+            volume: TTS playback volume (0.0 to 1.0)
         """
         # Initialize base executor
-        super().__init__(simulation_mode=simulation_mode, verbose=verbose)
+        super().__init__(simulation_mode=simulation_mode, verbose=verbose, volume=volume)
 
         self.enable_vision = enable_vision
         self.vlm_model = vlm_model
