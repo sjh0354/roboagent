@@ -62,13 +62,13 @@ class ASRManager:
         print(f"   - Audio Recording: {'✅ Available (sounddevice)' if SOUNDDEVICE_AVAILABLE else '❌ Not installed (pip install sounddevice scipy)'}")
         print(f"   - Model: {self.model}")
 
-    def record_audio(self, duration: float = 5.0, sample_rate: int = 16000) -> Optional[str]:
+    def record_audio(self, duration: float = 5.0, sample_rate: int = 48000) -> Optional[str]:
         """
         Record audio from microphone
 
         Args:
             duration: Recording duration in seconds
-            sample_rate: Sample rate (16000 is recommended for ASR)
+            sample_rate: Sample rate (48000 is default for many USB mics)
 
         Returns:
             str: Path to recorded wav file, or None if failed
@@ -78,12 +78,30 @@ class ASRManager:
                 print("❌ sounddevice or scipy not available. Cannot record.")
             return None
 
+        # Find input device
+        device_id = None
+        try:
+            devices = sd.query_devices()
+            for i, dev in enumerate(devices):
+                if "Loostone" in dev['name'] and dev['max_input_channels'] > 0:
+                    device_id = i
+                    if self.verbose:
+                        print(f"🎤 Using microphone: {dev['name']} (Index: {i})")
+                    break
+            
+            if device_id is None and self.verbose:
+                 print("⚠️  Loostone microphone not found. Using default device.")
+
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️  Error querying devices: {e}")
+
         if self.verbose:
             print(f"🎙️  Recording for {duration} seconds... (Speak now)")
 
         try:
             # Record
-            recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='int16')
+            recording = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='int16', device=device_id)
             sd.wait()  # Wait until recording is finished
             
             # Save to temp file

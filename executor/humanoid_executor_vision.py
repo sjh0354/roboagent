@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from executor.humanoid_executor import HumanoidExecutor, ExecutionResult
 from utils.qwen_vlm_client import QwenVLMClient
 from utils.simulation_image_manager import SimulationImageManager
-from utils.realsense_manager import RealSenseCameraManager
+from utils.dabai_camera_manager import DaBaiCameraManager
 
 
 class VisionEnabledExecutor(HumanoidExecutor):
@@ -68,12 +68,12 @@ class VisionEnabledExecutor(HumanoidExecutor):
                     print("⚠️  DASHSCOPE_API_KEY not set. VLM disabled (will use text descriptions)")
                 self.enable_vision = False
 
-            # Initialize RealSense camera if in real robot mode
+            # Initialize DaBai camera if in real robot mode
             if not self.simulation_mode:
                 try:
-                    self.camera_manager = RealSenseCameraManager(verbose=self.verbose)
+                    self.camera_manager = DaBaiCameraManager(device_id=6, verbose=self.verbose)
                 except Exception as e:
-                    print(f"⚠️  RealSense camera initialization failed: {str(e)}")
+                    print(f"⚠️  DaBai camera initialization failed: {str(e)}")
                     print("   Falling back to simulation image manager")
 
             # Initialize simulation image manager (always available as fallback/simulation)

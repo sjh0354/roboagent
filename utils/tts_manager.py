@@ -210,4 +210,4 @@ class TTSManager:
 if __name__ == "__main__":
     # Test
     manager = TTSManager(verbose=True)
-    manager.speak("This is a test of the text to speech system.", block=True)
+    manager.speak("你好，你好，可以听到我说话吗？", block=True)
