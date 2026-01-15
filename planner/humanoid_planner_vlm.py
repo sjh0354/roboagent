@@ -43,7 +43,7 @@ class AutonomousVLMPlanner:
                  model_name: str = "qwen-vl-plus",
                  simulation_mode: bool = True,
                  verbose: bool = True,
-                 volume: float = 1.0):
+                 volume: float = 0.1):
         """
         Initialize VLM-based autonomous planner
 
@@ -181,8 +181,13 @@ class AutonomousVLMPlanner:
 
             if step_plan.get("needs_human_input"):
                 # If there is an action associated (e.g. speak), execute it first so the user hears/sees it
+                just_spoke = False
                 if step_plan.get("next_step"):
                      self._execute_step(step_plan)
+                     # Check if we just executed a speak action
+                     action = step_plan.get("next_step", {}).get("action")
+                     if action in ["speak", "talk_with_human"]:
+                        just_spoke = True
 
                 # Pause for human clarification
                 self.waiting_for_human = True
@@ -191,6 +196,10 @@ class AutonomousVLMPlanner:
                 if self.verbose:
                     print(f"\n⏸️  PAUSED: Waiting for human input")
                     print(f"❓ Question: {self.human_question}")
+
+                # Speak the question if we haven't just spoken it via an action
+                if not just_spoke and self.human_question and hasattr(self.executor, 'tts_manager') and self.executor.tts_manager:
+                     self.executor.tts_manager.speak(self.human_question, model="cosyvoice-v1", block=False)
 
                 return step_plan
 
@@ -534,7 +543,7 @@ def main():
         # Initialize planner
         planner = AutonomousVLMPlanner(
             model_name="qwen-vl-plus",
-            simulation_mode=True,
+            simulation_mode=False,
             verbose=True
         )
 
@@ -570,10 +579,10 @@ def main():
                     continue
                 
                 # Ask for confirmation
-                confirm = input("Confirm? (y/n) > ").strip().lower()
-                if confirm != 'y':
-                    print("❌ Cancelled.")
-                    continue
+                # confirm = input("Confirm? (y/n) > ").strip().lower()
+                # if confirm != 'y':
+                #     print("❌ Cancelled.")
+                #     continue
 
             # Handle commands
             if user_input.lower() in ['quit', 'q']:
@@ -622,11 +631,9 @@ def main():
                     response = asr.listen_and_transcribe(duration=5.0)
                     print(f"📝 Transcribed: {response}")
                     
-                    if not response.startswith("Error"):
-                        if input("Confirm? (y/n) > ").strip().lower() == 'y':
-                             result = planner.provide_human_response(response)
-                    else:
+                    if response.startswith("Error"):
                         print("❌ Voice input failed.")
+
                 else:
                     result = planner.provide_human_response(response)
 

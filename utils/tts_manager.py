@@ -231,6 +231,6 @@ class TTSManager:
 # Example usage
 if __name__ == "__main__":
     # Test
-    manager = TTSManager(verbose=True, volume=0.8)
-    manager.speak("你好，我现在的音量是百分之八十。", block=True)
-    manager.speak("Checking volume fifty percent.", volume=0.5, block=True)
+    manager = TTSManager(verbose=True, volume=0.1)
+    manager.speak("你好，我现在的音量是百分之十。", block=True)
+    #manager.speak("Checking volume fifty percent.", volume=0.5, block=True)

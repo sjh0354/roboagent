@@ -188,16 +188,13 @@ class HumanoidExecutor:
     def _speak(self, message: str) -> ExecutionResult:
         """Speak/communicate (unified action for all communication)"""
         
-        # Trigger TTS if available
-        if self.tts_manager:
-            # Use threading to not block execution flow significantly, 
-            # or block=True if we want to ensure message is heard before continuing.
-            # Usually for 'speak', we want to hear it.
-            self.tts_manager.speak(message, model="cosyvoice-v1", block=False)
-
         if self.simulation_mode:
             # Simulation: just display the message
             print(f"🤖 Robot says: \"{message}\"")
+            
+            # Optional: Play TTS in simulation too (non-blocking)
+            if self.tts_manager:
+                self.tts_manager.speak(message, model="cosyvoice-v1", block=False)
 
             # Detect if this is a store request based on message content
             is_store_request = any(keyword in message.lower() for keyword in ['get', 'please', 'request', 'need'])
@@ -393,12 +390,12 @@ class HumanoidExecutor:
             
             try:
                 # Commands from humaniod_execution_guide.md:
-                # cd /home/peanut/sc_ros
+                # cd /home/peanut/sc_ros_hzz
                 # source install/setup.bash
                 # ros2 run sc_ros2 pick
-                cmd = "source /home/peanut/sc_ros/install/setup.bash && ros2 run sc_ros2 pick"
+                cmd = "source install/setup.bash && ros2 run sc_ros2 pick"
                 
-                subprocess.run(cmd, shell=True, executable='/bin/bash', check=True)
+                subprocess.run(cmd, shell=True, executable='/bin/bash', cwd='/home/peanut/sc_ros_hzz', check=True)
                 
                 return ExecutionResult(
                     success=True,
@@ -441,9 +438,9 @@ class HumanoidExecutor:
                 # cd /home/peanut/sc_ros
                 # source install/setup.bash
                 # ros2 run sc_ros2 place
-                cmd = "source /home/peanut/sc_ros/install/setup.bash && ros2 run sc_ros2 place"
+                cmd = "source install/setup.bash && ros2 run sc_ros2 place"
                 
-                subprocess.run(cmd, shell=True, executable='/bin/bash', check=True)
+                subprocess.run(cmd, shell=True, executable='/bin/bash', cwd='/home/peanut/sc_ros', check=True)
                 
                 return ExecutionResult(
                     success=True,
