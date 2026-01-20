@@ -353,10 +353,26 @@ def get_arm_vlm_config(model_name=None):
             "base_url": None,
             "max_tokens": 3000,
             "temperature": 0.7
+        },
+        "gemini-2.5-flash-lite": {
+            "model": "gemini-2.5-flash-lite",
+            "base_url": None,
+            "max_tokens": 2000,
+            "temperature": 0.7
         }
     }
 
-    return configs.get(model, configs["gemini-2.0-flash-exp"])
+    # If model is known, return its specific config
+    if model in configs:
+        return configs[model]
+    
+    # If model is unknown, return a dynamic config with the requested model name
+    return {
+        "model": model,
+        "base_url": None,
+        "max_tokens": 2000,
+        "temperature": 0.7
+    }
 
 
 def validate_arm_vlm_response(response_text):

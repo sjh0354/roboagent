@@ -44,10 +44,47 @@ class GeminiVLMClient:
         self.verbose = verbose
 
         # Initialize Google GenAI client
-        self.client = genai.Client(api_key=self.api_key)
+        self.base_url = os.getenv("GENAI_BASE_URL")
+        client_options = {"api_key": self.api_key}
+        if self.base_url:
+            if self.verbose:
+                print(f"🌐 Using custom Base URL: {self.base_url}")
+            # For google-genai SDK, usually http_options is the way for custom endpoints
+            client_options["http_options"] = {"base_url": self.base_url}
+            
+        self.client = genai.Client(**client_options)
 
         if verbose:
             print(f"✅ GeminiVLMClient initialized with model: {model_name}")
+
+    def _extract_content(self, response) -> str:
+        """Helper to extract text and handle thoughts from response"""
+        final_text = []
+        
+        if not response.candidates:
+            return ""
+            
+        candidate = response.candidates[0]
+        if not hasattr(candidate, 'content') or not candidate.content.parts:
+            return ""
+            
+        for part in candidate.content.parts:
+            # Skip empty text
+            if not part.text:
+                continue
+                
+            # Check for thought content (gemini-3-pro-preview etc)
+            is_thought = False
+            if hasattr(part, 'thought') and part.thought:
+                is_thought = True
+                
+            if is_thought:
+                if self.verbose:
+                    print(f"\n💭 [THOUGHT]:\n{part.text}\n")
+            else:
+                final_text.append(part.text)
+                
+        return "".join(final_text)
 
     def create_image_message(self, image_path: str) -> Dict:
         """
@@ -215,12 +252,12 @@ Respond in JSON format:
             
             parts = []
             if isinstance(content, str):
-                parts.append(content)
+                parts.append(types.Part.from_text(text=content))
             elif isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict):
                         if item.get("type") == "text":
-                            parts.append(item["text"])
+                            parts.append(types.Part.from_text(text=item["text"]))
                         elif item.get("type") == "image_url":
                             # Use the internal path we stored
                             path = item.get("_internal_path") or item.get("image_url", {}).get("url")
@@ -303,12 +340,12 @@ Be specific and factual.
             
             parts = []
             if isinstance(content, str):
-                parts.append(content)
+                parts.append(types.Part.from_text(text=content))
             elif isinstance(content, list):
                 for item in content:
                     if isinstance(item, dict):
                         if item.get("type") == "text":
-                            parts.append(item["text"])
+                            parts.append(types.Part.from_text(text=item["text"]))
                         elif item.get("type") == "image_url":
                             path = item.get("_internal_path") or item.get("image_url", {}).get("url")
                             if path and not path.startswith("data:"):

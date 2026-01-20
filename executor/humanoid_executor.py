@@ -440,7 +440,7 @@ class HumanoidExecutor:
                 # ros2 run sc_ros2 place
                 cmd = "source install/setup.bash && ros2 run sc_ros2 place"
                 
-                subprocess.run(cmd, shell=True, executable='/bin/bash', cwd='/home/peanut/sc_ros', check=True)
+                subprocess.run(cmd, shell=True, executable='/bin/bash', cwd='/home/peanut/sc_ros_hzz', check=True)
                 
                 return ExecutionResult(
                     success=True,
