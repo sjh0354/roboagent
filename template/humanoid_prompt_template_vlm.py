@@ -448,32 +448,38 @@ def get_humanoid_vlm_system_prompt():
 
 def get_humanoid_vlm_config(model_name=None):
     """
-    Get configuration for Qwen VLM models
+    Get configuration for Gemini VLM models
 
     Args:
-        model_name: Override model (default: qwen-vl-plus)
+        model_name: Override model (default: gemini-2.0-flash-exp)
 
     Returns:
         dict: Configuration for VLM API calls
     """
-    model = model_name or "qwen-vl-plus"
+    model = model_name or "gemini-2.0-flash-exp"
 
     configs = {
-        "qwen-vl-plus": {
-            "model": "qwen-vl-plus",
-            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "gemini-2.0-flash-exp": {
+            "model": "gemini-2.0-flash-exp",
+            "base_url": None,
             "max_tokens": 2000,
             "temperature": 0.7
         },
-        "qwen-vl-max": {
-            "model": "qwen-vl-max",
-            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "gemini-2.0-flash-thinking-exp-01-21": {
+            "model": "gemini-2.0-flash-thinking-exp-01-21",
+            "base_url": None,
+            "max_tokens": 3000,
+            "temperature": 0.7
+        },
+        "gemini-3-pro-preview": {
+            "model": "gemini-3-pro-preview",
+            "base_url": None,
             "max_tokens": 3000,
             "temperature": 0.7
         }
     }
 
-    return configs.get(model, configs["qwen-vl-plus"])
+    return configs.get(model, configs["gemini-2.0-flash-exp"])
 
 
 def validate_vlm_response(response_text):
@@ -556,14 +562,16 @@ def list_available_vlm_models():
     """List available VLM models"""
     print("\n📋 Available VLM Models:")
     print("="*70)
-    print("1. qwen-vl-plus (default)")
+    print("1. gemini-2.0-flash-exp (default)")
     print("   - Recommended for most tasks")
     print("   - Good balance of speed and accuracy")
     print("   - Cost-effective")
-    print("\n2. qwen-vl-max")
-    print("   - Highest accuracy")
+    print("\n2. gemini-2.0-flash-thinking-exp-01-21")
+    print("   - Enhanced reasoning capabilities")
     print("   - Best for complex visual reasoning")
-    print("   - Higher cost")
+    print("\n3. gemini-3-pro-preview")
+    print("   - Latest preview model")
+    print("   - High performance")
     print("="*70)
 
 

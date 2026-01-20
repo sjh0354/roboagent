@@ -13,7 +13,6 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import json
 from datetime import datetime
 from typing import Dict, Optional, List, Any
-from openai import OpenAI
 
 from template.humanoid_prompt_template_vlm import (
     get_humanoid_vlm_system_prompt,
@@ -23,7 +22,7 @@ from template.humanoid_prompt_template_vlm import (
     list_available_vlm_models
 )
 from executor.humanoid_executor_vision import VisionEnabledExecutor
-from utils.qwen_vlm_client import QwenVLMClient
+from utils.gemini_vlm_client import GeminiVLMClient
 from utils.asr_manager import ASRManager
 
 
@@ -40,7 +39,7 @@ class AutonomousVLMPlanner:
 
     def __init__(self,
                  api_key: Optional[str] = None,
-                 model_name: str = "qwen-vl-plus",
+                 model_name: str = os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
                  simulation_mode: bool = True,
                  verbose: bool = True,
                  volume: float = 0.1):
@@ -48,34 +47,32 @@ class AutonomousVLMPlanner:
         Initialize VLM-based autonomous planner
 
         Args:
-            api_key: DashScope API key
-            model_name: VLM model name (qwen-vl-plus, qwen-vl-max)
+            api_key: Google GenAI API key
+            model_name: VLM model name (default: from env DEFAULT_VLM_MODEL or gemini-2.0-flash-exp)
             simulation_mode: Use simulation images (True) or real camera (False)
             verbose: Print detailed logs
             volume: TTS playback volume (0.0 to 1.0)
         """
         # Get API key
-        self.api_key = api_key or os.getenv("DASHSCOPE_API_KEY")
+        self.api_key = api_key or os.getenv("GENAI_API_KEY")
+        if not self.api_key:
+            # Fallback
+            self.api_key = os.getenv("DASHSCOPE_API_KEY")
+
         if not self.api_key:
             raise ValueError(
-                "API key not found. Set DASHSCOPE_API_KEY environment variable or provide api_key parameter."
+                "API key not found. Set GENAI_API_KEY environment variable or provide api_key parameter."
             )
 
         # Configuration
         self.config = get_humanoid_vlm_config(model_name)
         self.verbose = verbose
 
-        # Initialize OpenAI client (for VLM API)
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.config["base_url"]
-        )
-
         # System prompt
         self.system_prompt = get_humanoid_vlm_system_prompt()
 
-        # Initialize VLM client (for helper operations)
-        self.vlm_client = QwenVLMClient(
+        # Initialize VLM client
+        self.vlm_client = GeminiVLMClient(
             api_key=self.api_key,
             model_name=model_name,
             verbose=verbose
@@ -309,7 +306,7 @@ class AutonomousVLMPlanner:
             if self.verbose:
                 print(f"\n🧠 Planning next step with VLM ({self.config['model']})...")
 
-            response = self.client.chat.completions.create(
+            response = self.vlm_client.create_chat_completion(
                 model=self.config["model"],
                 messages=messages,
                 max_tokens=self.config["max_tokens"],
@@ -532,9 +529,9 @@ def main():
     print("="*70)
 
     # Check API key
-    if not os.getenv("DASHSCOPE_API_KEY"):
-        print("⚠️  DASHSCOPE_API_KEY environment variable not set")
-        print("Set it using: export DASHSCOPE_API_KEY='your-key'")
+    if not os.getenv("GENAI_API_KEY"):
+        print("⚠️  GENAI_API_KEY environment variable not set")
+        print("Set it using: export GENAI_API_KEY='your-key'")
         print("\n💡 You can still test in simulation mode without VLM API,")
         print("   but planning will fail without the API key.")
         return
@@ -542,7 +539,7 @@ def main():
     try:
         # Initialize planner
         planner = AutonomousVLMPlanner(
-            model_name="qwen-vl-plus",
+            model_name=os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
             simulation_mode=False,
             verbose=True
         )

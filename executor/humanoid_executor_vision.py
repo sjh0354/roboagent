@@ -9,7 +9,7 @@ import os
 import time
 from typing import Dict, Any, Optional
 from executor.humanoid_executor import HumanoidExecutor, ExecutionResult
-from utils.qwen_vlm_client import QwenVLMClient
+from utils.gemini_vlm_client import GeminiVLMClient
 from utils.simulation_image_manager import SimulationImageManager
 from utils.dabai_camera_manager import DaBaiCameraManager
 
@@ -28,7 +28,7 @@ class VisionEnabledExecutor(HumanoidExecutor):
                  simulation_mode: bool = True,
                  verbose: bool = True,
                  enable_vision: bool = True,
-                 vlm_model: str = "qwen-vl-plus",
+                 vlm_model: str = os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
                  volume: float = 1.0):
         """
         Initialize vision-enabled executor
@@ -37,7 +37,7 @@ class VisionEnabledExecutor(HumanoidExecutor):
             simulation_mode: If True, use simulation; if False, use real hardware
             verbose: Print execution details
             enable_vision: Enable vision-based observation
-            vlm_model: VLM model to use (qwen-vl-plus, qwen-vl-max)
+            vlm_model: VLM model to use (default: from env DEFAULT_VLM_MODEL or gemini-2.0-flash-exp)
             volume: TTS playback volume (0.0 to 1.0)
         """
         # Initialize base executor
@@ -58,8 +58,11 @@ class VisionEnabledExecutor(HumanoidExecutor):
         """Initialize vision components"""
         try:
             # Initialize VLM client
-            if os.getenv("DASHSCOPE_API_KEY"):
-                self.vlm_client = QwenVLMClient(
+            api_key = os.getenv("GENAI_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+            
+            if api_key:
+                self.vlm_client = GeminiVLMClient(
+                    api_key=api_key,
                     model_name=self.vlm_model,
                     verbose=self.verbose
                 )
@@ -67,7 +70,7 @@ class VisionEnabledExecutor(HumanoidExecutor):
                     print(f"✅ VLM client initialized: {self.vlm_model}")
             else:
                 if self.verbose:
-                    print("⚠️  DASHSCOPE_API_KEY not set. VLM disabled (will use text descriptions)")
+                    print("⚠️  GENAI_API_KEY not set. VLM disabled (will use text descriptions)")
                 self.enable_vision = False
 
             # Initialize DaBai camera if in real robot mode
@@ -320,7 +323,7 @@ if __name__ == "__main__":
     print("Execution Complete")
     print("="*70)
     print("\nTo use with real VLM:")
-    print("  1. Set DASHSCOPE_API_KEY environment variable")
+    print("  1. Set GENAI_API_KEY environment variable")
     print("  2. Provide real observation images in simulation_images/")
     print("  3. VLM will automatically analyze images and enhance feedback")
     print("="*70)

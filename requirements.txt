@@ -8,3 +8,4 @@ dashscope
 scipy
 sounddevice
 qwen3-asr-toolkit
+google-genai
