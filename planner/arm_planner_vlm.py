@@ -25,7 +25,7 @@ from template.arm_prompt_template_vlm import (
     list_available_vlm_models
 )
 from utils.gemini_vlm_client import GeminiVLMClient
-from utils.asr_manager import ASRManager
+from utils.funasr_manager import FunASRManager
 
 
 class AutonomousArmVLMPlanner:
@@ -564,6 +564,8 @@ class AutonomousArmVLMPlanner:
 
 def main():
     """Main function for testing"""
+    import select
+    
     print("🦾 Autonomous VLM-Based Robotic Arm Planner")
     print("="*70)
 
@@ -581,14 +583,16 @@ def main():
             verbose=True
         )
 
-        # Initialize ASR
-        asr = ASRManager(verbose=True)
+        # Initialize Always-On ASR
+        asr = FunASRManager(verbose=True)
+        asr.start()
 
         print("\n" + "="*70)
         print("🎮 AUTONOMOUS ARM VLM PLANNER - Ready")
         print("="*70)
         print("📋 Commands:")
-        print("  - Enter request from humanoid robot (or 'mic' for voice)")
+        print("  - Speak wake word (e.g. '你好机器人') followed by your request")
+        print("  - Type request from humanoid robot directly")
         print("  - 'models' or 'm': List available VLM models")
         print("  - 'switch <model>': Switch VLM model")
         print("  - 'status' or 's': Show task status")
@@ -597,23 +601,27 @@ def main():
         print("="*70)
 
         while True:
-            user_input = input("\n🦾 Enter humanoid request (or 'mic' for voice) > ").strip()
-
+            user_input = None
+            
+            # 1. Check for voice command (non-blocking)
+            voice_cmd = asr.get_command()
+            if voice_cmd:
+                print(f"\n🎙️  Voice command detected: {voice_cmd}")
+                user_input = voice_cmd
+            
+            # 2. Check for keyboard input (non-blocking)
+            if not user_input:
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+                if rlist:
+                    user_input = sys.stdin.readline().strip()
+            
             if not user_input:
                 continue
-
-            # Handle voice input
-            if user_input.lower() in ['mic', 'voice']:
-                print("\n🎙️ Listening for instruction...")
-                user_input = asr.listen_and_transcribe(duration=5.0)
-                print(f"📝 Transcribed: {user_input}")
-                
-                if user_input.startswith("Error"):
-                    continue
 
             # Handle commands
             if user_input.lower() in ['quit', 'q']:
                 print("👋 Goodbye!")
+                asr.stop()
                 break
 
             elif user_input.lower() in ['models', 'm']:
@@ -639,22 +647,25 @@ def main():
             # Start new task
             result = planner.start_new_task(user_input, run_autonomously=True)
 
-            # Handle result
+            # Handle result (Clarification)
             if result.get("status") == "waiting_for_humanoid":
-                response = input(f"\n❓ {result['question']}\nYour response (or 'mic') > ").strip()
+                print(f"\n❓ {result['question']}")
+                print("Your response (speak or type) > ", end="", flush=True)
                 
-                # Handle voice response
-                if response.lower() in ['mic', 'voice']:
-                    print("\n🎙️ Listening for response...")
-                    response = asr.listen_and_transcribe(duration=5.0)
-                    print(f"📝 Transcribed: {response}")
+                response = None
+                while not response:
+                    # Check voice
+                    v_res = asr.get_command()
+                    if v_res:
+                        print(f"{v_res} (voice)")
+                        response = v_res
                     
-                    if not response.startswith("Error"):
-                        result = planner.provide_humanoid_response(response)
-                    else:
-                        print("❌ Voice input failed.")
-                else:
-                    result = planner.provide_humanoid_response(response)
+                    # Check keyboard
+                    rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+                    if rlist:
+                        response = sys.stdin.readline().strip()
+                
+                result = planner.provide_humanoid_response(response)
 
             # Show final result
             if result.get("is_complete"):
@@ -664,8 +675,10 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted. Goodbye!")
+        if 'asr' in locals(): asr.stop()
     except Exception as e:
         print(f"❌ Error: {str(e)}")
+        if 'asr' in locals(): asr.stop()
 
 
 if __name__ == "__main__":
