@@ -268,6 +268,35 @@ class VisionEnabledExecutor(HumanoidExecutor):
 
         return stats
 
+    def _web_search(self, url: str, query: str) -> ExecutionResult:
+        """
+        Perform web search using VLM client (Gemini Grounding).
+        Overrides base HumanoidExecutor._web_search.
+        """
+        # If VLM client is available, use it for search
+        if self.vlm_client:
+            if self.verbose:
+                print(f"🌐 VisionEnabledExecutor: Delegating web search '{query}' to VLM client...")
+            
+            try:
+                # Use the new perform_web_search method
+                search_result = self.vlm_client.perform_web_search(query)
+                
+                return ExecutionResult(
+                    success=True,
+                    feedback=f"Web search result for '{query}': {search_result}",
+                    data={"query": query, "result": search_result, "source": "Gemini Grounding"}
+                )
+            except Exception as e:
+                return ExecutionResult(
+                    success=False,
+                    feedback=f"Web search failed: {str(e)}",
+                    error=str(e)
+                )
+        
+        # Fallback to simulation mode behavior from base class if VLM not available
+        return super()._web_search(url, query)
+
 
 # Example usage
 if __name__ == "__main__":

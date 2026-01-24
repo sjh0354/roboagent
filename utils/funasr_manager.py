@@ -71,17 +71,18 @@ class FunASRManager:
             if self.verbose:
                 print(f"🔄 Loading FunASR models on {device} (this may take a moment)...")
             try:
-                # Load SenseVoiceSmall with VAD
+                # Load SenseVoiceSmall without VAD for debugging/short chunks
+                # We are feeding short chunks (3s) so we can rely on model to just output empty if silence
                 self.model = AutoModel(
                     model=model_id,
-                    vad_model=vad_model_id,
-                    vad_kwargs={"max_single_segment_time": 30000},
+                    # vad_model=vad_model_id, # Disable VAD for now to test raw ASR
+                    # vad_kwargs={"max_single_segment_time": 30000},
                     trust_remote_code=True,
                     device=self.device,
                     disable_update=True
                 )
                 if self.verbose:
-                    print("✅ FunASR models loaded successfully")
+                    print("✅ FunASR models loaded successfully (VAD Disabled)")
             except Exception as e:
                 print(f"❌ Failed to load FunASR models: {e}")
         else:
@@ -89,8 +90,11 @@ class FunASRManager:
 
     def start(self):
         """Start the continuous listening thread"""
-        if not self.model or not SOUNDDEVICE_AVAILABLE:
-            print("❌ Cannot start listening: Dependencies missing")
+        if not self.model:
+            print("❌ Cannot start listening: Model not loaded")
+            return
+        if not SOUNDDEVICE_AVAILABLE:
+            print("❌ Cannot start listening: sounddevice not available")
             return
 
         if self.is_listening:
@@ -134,8 +138,13 @@ class FunASRManager:
                 
                 audio_data = recording.flatten()
                 
+                # Check energy
+                # max_energy = np.max(np.abs(audio_data))
+                # if self.verbose:
+                #     print(f"🔊 Max Energy: {max_energy:.4f}")
+
                 # Check if there is any sound (simple energy threshold to avoid API call if silent)
-                if np.max(np.abs(audio_data)) < 0.01:
+                if np.max(np.abs(audio_data)) < 0.005: 
                     continue
 
                 # Inference
@@ -146,6 +155,9 @@ class FunASRManager:
                     language="zh", 
                     use_itn=True
                 )
+                
+                # if self.verbose:
+                #     print(f"DEBUG: raw res: {res}")
                 
                 if not res or not isinstance(res, list):
                     continue
@@ -182,7 +194,8 @@ class FunASRManager:
         """Remove SenseVoice specific tags like <|zh|>, <|HAPPY|>, etc."""
         import re
         # Remove anything between <| and |>
-        return re.sub(r'<|.*?|>', '', text).strip()
+        # Need to escape | because it is a special regex char (OR)
+        return re.sub(r'<\|.*?\|>', '', text).strip()
 
     def get_command(self) -> Optional[str]:
         """Get latest command from queue (non-blocking)"""

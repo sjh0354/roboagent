@@ -11,4 +11,3 @@ qwen3-asr-toolkit
 google-genai
 funasr
 modelscope
-opencv-python

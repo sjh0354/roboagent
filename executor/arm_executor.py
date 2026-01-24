@@ -118,6 +118,8 @@ class ArmExecutor:
             # Route to appropriate handler
             if action_type == "talk":
                 result = self._execute_talk(action_name, parameters)
+            elif action_type == "tool":
+                result = self._execute_tool(action_name, parameters)
             elif action_type == "act":
                 result = self._execute_act(action_name, parameters)
             elif action_type == "sense":
@@ -187,6 +189,37 @@ class ArmExecutor:
                 feedback=f"Message spoken: '{message}'",
                 data={"message": message}
             )
+
+    # ==================== TOOL Actions ====================
+
+    def _execute_tool(self, action: str, params: Dict) -> ExecutionResult:
+        """Execute tool/utility actions"""
+        if action == "web_search":
+            return self._web_search(
+                params.get("URL", ""),
+                params.get("query", "")
+            )
+        else:
+            return ExecutionResult(
+                success=False,
+                feedback=f"Unknown tool action: {action}",
+                error=f"Action '{action}' not implemented"
+            )
+
+    def _web_search(self, url: str, query: str) -> ExecutionResult:
+        """Perform web search"""
+        if self.simulation_mode:
+            print(f"🔍 Searching '{query}' on {url}")
+            # Simulate search results
+            mock_results = f"Found information about '{query}': [Simulated search results]"
+            return ExecutionResult(
+                success=True,
+                feedback=f"Web search completed for '{query}'",
+                data={"query": query, "url": url, "results": mock_results}
+            )
+        else:
+            # Base implementation doesn't support real search
+            raise NotImplementedError("Real web search not yet implemented")
 
     # ==================== ACT Actions ====================
 

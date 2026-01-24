@@ -57,6 +57,52 @@ class GeminiVLMClient:
         if verbose:
             print(f"✅ GeminiVLMClient initialized with model: {model_name}")
 
+    def perform_web_search(self, query: str) -> str:
+        """
+        Perform a web search using Gemini's grounding capabilities.
+        
+        Args:
+            query: The search query.
+            
+        Returns:
+            str: A summary of the search results provided by Gemini.
+        """
+        if self.verbose:
+            print(f"\n🔍 Executing Web Search via Gemini: '{query}'")
+            
+        try:
+            # Configure the tool for Google Search
+            tools = [types.Tool(google_search=types.GoogleSearch())]
+            
+            # Create a prompt that asks for the search
+            prompt = f"Please search the web for '{query}' and provide a concise summary of the key information found."
+            
+            config = types.GenerateContentConfig(
+                tools=tools,
+                temperature=0.7
+            )
+            
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=config
+            )
+            
+            # Extract text result
+            # For grounded responses, response.text usually contains the answer
+            result = response.text
+            
+            if self.verbose:
+                print(f"✅ Search Result: {result[:200]}...")
+                
+            return result
+            
+        except Exception as e:
+            error_msg = f"Web search failed: {str(e)}"
+            if self.verbose:
+                print(f"❌ {error_msg}")
+            return f"Error performing web search: {str(e)}"
+
     def _extract_content(self, response) -> str:
         """Helper to extract text and handle thoughts from response"""
         final_text = []
