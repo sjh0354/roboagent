@@ -1,17 +1,20 @@
 # utils/funasr_manager.py
 
 """
-FunASR Manager (SenseVoice + FSMN-VAD)
-Handles continuous speech recognition, VAD, and wake word detection locally.
+FunASR Remote Client Manager
+Handles continuous audio capture and sends chunks to a remote FunASR server for inference.
+This protects local storage from heavy model checkpoints.
 """
 
 import os
-import sys
 import threading
 import time
 import queue
 import numpy as np
-from typing import Optional, List, Dict, Any
+import io
+import requests
+import scipy.io.wavfile as wav
+from typing import Optional, List
 
 # Audio recording
 try:
@@ -20,81 +23,50 @@ try:
 except ImportError:
     SOUNDDEVICE_AVAILABLE = False
 
-# FunASR
-try:
-    from funasr import AutoModel
-    FUNASR_AVAILABLE = True
-except ImportError:
-    FUNASR_AVAILABLE = False
-
 
 class FunASRManager:
     """
-    Manages Always-On Speech Recognition using FunASR (SenseVoice + FSMN-VAD).
-    
-    Features:
-    - Continuous audio streaming
-    - VAD (Voice Activity Detection) to segment speech
-    - Local ASR inference using SenseVoiceSmall
-    - Wake word detection (text-based)
+    Lightweight client for Always-On Speech Recognition via remote server.
     """
 
     def __init__(self, 
-                 model_id: str = "iic/SenseVoiceSmall",
-                 vad_model_id: str = "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
                  wake_words: List[str] = ["你好机器人", "开始任务", "小智", "你好"],
-                 device: str = "cpu",
+                 server_url: Optional[str] = None,
                  verbose: bool = True):
         """
-        Initialize FunASR Manager
+        Initialize FunASR Remote Manager
 
         Args:
-            model_id: ModelScope model ID for ASR
-            vad_model_id: ModelScope model ID for VAD
             wake_words: List of wake words/phrases to trigger command mode
-            device: 'cpu' or 'cuda'
+            server_url: URL of the remote ASR server (e.g., "http://192.168.1.100:8000").
+                        If None, reads from 'ASR_SERVER_URL' environment variable.
             verbose: Print debug info
         """
         self.verbose = verbose
         self.wake_words = wake_words
         self.is_listening = False
         self.command_queue = queue.Queue()
-        self.device = device
         
+        # Resolve server URL
+        self.server_url = server_url or os.getenv("ASR_SERVER_URL")
+        if not self.server_url:
+            print("⚠️  Warning: ASR_SERVER_URL not set. Remote inference will fail.")
+        elif self.verbose:
+            print(f"🌐 FunASR Client configured for server: {self.server_url}")
+
         # Audio configuration
-        self.sample_rate = 16000 # FunASR models usually expect 16k
+        self.sample_rate = 16000 
         
-        # Models
-        self.model = None
-        
-        if FUNASR_AVAILABLE:
-            if self.verbose:
-                print(f"🔄 Loading FunASR models on {device} (this may take a moment)...")
-            try:
-                # Load SenseVoiceSmall without VAD for debugging/short chunks
-                # We are feeding short chunks (3s) so we can rely on model to just output empty if silence
-                self.model = AutoModel(
-                    model=model_id,
-                    # vad_model=vad_model_id, # Disable VAD for now to test raw ASR
-                    # vad_kwargs={"max_single_segment_time": 30000},
-                    trust_remote_code=True,
-                    device=self.device,
-                    disable_update=True
-                )
-                if self.verbose:
-                    print("✅ FunASR models loaded successfully (VAD Disabled)")
-            except Exception as e:
-                print(f"❌ Failed to load FunASR models: {e}")
-        else:
-            print("❌ funasr not installed. Run: pip install funasr modelscope")
+        if not SOUNDDEVICE_AVAILABLE:
+            print("❌ Error: 'sounddevice' not installed. Cannot capture audio.")
 
     def start(self):
         """Start the continuous listening thread"""
-        if not self.model:
-            print("❌ Cannot start listening: Model not loaded")
+        if not self.server_url:
+            print("❌ Cannot start listening: Remote server URL is missing.")
             return
         if not SOUNDDEVICE_AVAILABLE:
-            print("❌ Cannot start listening: sounddevice not available")
+            print("❌ Cannot start listening: Audio hardware/library not available.")
             return
 
         if self.is_listening:
@@ -105,7 +77,8 @@ class FunASRManager:
         self.listen_thread.start()
         
         if self.verbose:
-            print(f"👂 Continuous listening started (Wake words: {self.wake_words})")
+            print(f"👂 Remote listening started -> {self.server_url}")
+            print(f"   Wake words: {self.wake_words}")
 
     def stop(self):
         """Stop listening"""
@@ -113,21 +86,17 @@ class FunASRManager:
         if hasattr(self, 'listen_thread'):
             self.listen_thread.join(timeout=2.0)
         if self.verbose:
-            print("🛑 Continuous listening stopped")
+            print("🛑 Remote listening stopped")
 
     def _run_listen_loop(self):
         """
-        Simple loop: Record fixed chunks and process.
-        For a more advanced version, use VAD streaming API if available in funasr.
+        Main Loop: Record Chunk -> Send to Server -> Wake Word Check -> Queue
         """
-        # Chunk duration in seconds
-        chunk_duration = 3.0 
+        chunk_duration = 3.0 # 3-second segments
         
         while self.is_listening:
             try:
-                # Record a chunk
-                # We use a slightly overlapping or continuous recording if possible
-                # But for simplicity, we record 3s segments
+                # 1. Record Audio
                 recording = sd.rec(
                     int(chunk_duration * self.sample_rate), 
                     samplerate=self.sample_rate,
@@ -136,43 +105,20 @@ class FunASRManager:
                 )
                 sd.wait() 
                 
-                audio_data = recording.flatten()
-                
-                # Check energy
-                # max_energy = np.max(np.abs(audio_data))
-                # if self.verbose:
-                #     print(f"🔊 Max Energy: {max_energy:.4f}")
-
-                # Check if there is any sound (simple energy threshold to avoid API call if silent)
-                if np.max(np.abs(audio_data)) < 0.005: 
+                # Check energy to skip absolute silence
+                if np.max(np.abs(recording)) < 0.005: 
                     continue
 
-                # Inference
-                # SenseVoiceSmall output: [{'text': '...', 'label': '...', 'emoji': '...'}]
-                res = self.model.generate(
-                    input=audio_data, 
-                    cache={}, 
-                    language="zh", 
-                    use_itn=True
-                )
+                # 2. Remote Inference
+                text = self._infer_remote(recording)
                 
-                # if self.verbose:
-                #     print(f"DEBUG: raw res: {res}")
-                
-                if not res or not isinstance(res, list):
-                    continue
-                
-                text = res[0].get("text", "").strip()
                 if not text:
                     continue
                 
                 if self.verbose:
-                    # Clean tags like <|zh|> <|HAPPY|> etc.
-                    clean_text = self._clean_text(text)
-                    if clean_text:
-                        print(f"📝 Heard: {clean_text}")
+                    print(f"📝 Heard: {text}")
                 
-                # Wake word logic
+                # 3. Wake Word Logic
                 triggered = False
                 for ww in self.wake_words:
                     if ww in text:
@@ -180,22 +126,41 @@ class FunASRManager:
                         break
                 
                 if triggered:
-                    clean_command = self._clean_text(text)
                     if self.verbose:
-                        print(f"🚀 Wake word detected! Full text: {clean_command}")
-                    self.command_queue.put(clean_command)
+                        print(f"🚀 Wake word detected! Command: {text}")
+                    self.command_queue.put(text)
                     
             except Exception as e:
                 if self.is_listening:
-                    print(f"⚠️ ASR Loop Error: {e}")
+                    print(f"⚠️ Remote ASR Loop Error: {e}")
                 time.sleep(0.5)
 
-    def _clean_text(self, text: str) -> str:
-        """Remove SenseVoice specific tags like <|zh|>, <|HAPPY|>, etc."""
-        import re
-        # Remove anything between <| and |>
-        # Need to escape | because it is a special regex char (OR)
-        return re.sub(r'<\|.*?\|>', '', text).strip()
+    def _infer_remote(self, audio_data: np.ndarray) -> str:
+        """Send audio to remote server and get transcription"""
+        try:
+            # Convert float32 numpy to WAV bytes
+            audio_int16 = (audio_data * 32767).astype(np.int16)
+            byte_io = io.BytesIO()
+            wav.write(byte_io, self.sample_rate, audio_int16)
+            byte_io.seek(0)
+            
+            files = {'file': ('chunk.wav', byte_io, 'audio/wav')}
+            
+            # Prepare endpoint
+            endpoint = self.server_url.rstrip("/") + "/transcribe"
+            
+            response = requests.post(endpoint, files=files, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("text", "").strip()
+            else:
+                if self.verbose:
+                    print(f"❌ Server Error: {response.status_code}")
+        except Exception as e:
+            if self.verbose:
+                print(f"📡 Connection Error: {e}")
+        return ""
 
     def get_command(self) -> Optional[str]:
         """Get latest command from queue (non-blocking)"""
@@ -205,17 +170,16 @@ class FunASRManager:
             return None
 
 if __name__ == "__main__":
-    # Test script
+    # Quick Test
+    # export ASR_SERVER_URL="http://YOUR_WORKSTATION_IP:8000"
     manager = FunASRManager(verbose=True)
     manager.start()
     
-    print("\nPress Ctrl+C to stop...")
     try:
         while True:
             cmd = manager.get_command()
             if cmd:
-                print(f"🔔 COMMAND RECEIVED: {cmd}")
+                print(f"🔔 RECEIVED: {cmd}")
             time.sleep(0.1)
     except KeyboardInterrupt:
         manager.stop()
-        print("\nExiting...")
