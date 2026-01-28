@@ -30,9 +30,11 @@ class FunASRManager:
     Lightweight client for Always-On Speech Recognition via remote server.
     """
 
-    def __init__(self, 
+    def __init__(self,
                  wake_words: List[str] = ["你好机器人", "开始任务", "小智", "你好"],
                  server_url: Optional[str] = None,
+                 chunk_duration: float = 5.0,
+                 silence_threshold: float = 0.005,
                  verbose: bool = True):
         """
         Initialize FunASR Remote Manager
@@ -41,12 +43,17 @@ class FunASRManager:
             wake_words: List of wake words/phrases to trigger command mode
             server_url: URL of the remote ASR server (e.g., "http://192.168.1.100:8000").
                         If None, reads from 'ASR_SERVER_URL' environment variable.
+            chunk_duration: Duration in seconds for each audio chunk (default: 5.0)
+            silence_threshold: Energy threshold below which audio is considered silence (default: 0.005)
             verbose: Print debug info
         """
         self.verbose = verbose
         self.wake_words = wake_words
+        self.chunk_duration = chunk_duration
+        self.silence_threshold = silence_threshold
         self.is_listening = False
         self.command_queue = queue.Queue()
+        self.speech_queue = queue.Queue()  # All recognized speech (no wake word filter)
         
         # Resolve server URL
         self.server_url = server_url or os.getenv("ASR_SERVER_URL")
@@ -112,22 +119,20 @@ class FunASRManager:
         """
         Main Loop: Record Chunk -> Send to Server -> Wake Word Check -> Queue
         """
-        chunk_duration = 3.0 # 3-second segments
-        
         while self.is_listening:
             try:
                 # 1. Record Audio at device's native sample rate
                 recording = sd.rec(
-                    int(chunk_duration * self.device_sample_rate),
+                    int(self.chunk_duration * self.device_sample_rate),
                     samplerate=self.device_sample_rate,
                     channels=1,
                     dtype='float32',
                     device=self.device_id
                 )
-                sd.wait() 
-                
+                sd.wait()
+
                 # Check energy to skip absolute silence
-                if np.max(np.abs(recording)) < 0.005: 
+                if np.max(np.abs(recording)) < self.silence_threshold:
                     continue
 
                 # 2. Remote Inference
@@ -138,7 +143,10 @@ class FunASRManager:
                 
                 if self.verbose:
                     print(f"📝 Heard: {text}")
-                
+
+                # Put all recognized speech in speech_queue (for human response mode)
+                self.speech_queue.put(text)
+
                 # 3. Wake Word Logic
                 triggered = False
                 for ww in self.wake_words:
@@ -189,9 +197,16 @@ class FunASRManager:
         return ""
 
     def get_command(self) -> Optional[str]:
-        """Get latest command from queue (non-blocking)"""
+        """Get latest command from queue (non-blocking) - wake word triggered only"""
         try:
             return self.command_queue.get_nowait()
+        except queue.Empty:
+            return None
+
+    def get_speech(self) -> Optional[str]:
+        """Get latest recognized speech from queue (non-blocking) - no wake word filter"""
+        try:
+            return self.speech_queue.get_nowait()
         except queue.Empty:
             return None
 

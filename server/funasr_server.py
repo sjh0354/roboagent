@@ -12,18 +12,27 @@ VAD_MODEL_ID = "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch"
 HOST = "0.0.0.0"
 PORT = 8000
 
+# VAD parameters for longer speech segments
+VAD_KWARGS = {
+    "max_single_segment_time": 30000,  # Max segment length in ms (30 seconds)
+    "min_speech_duration": 500,        # Min speech duration in ms to be considered valid
+    "max_end_silence_time": 800,       # Silence duration in ms to end a segment (default ~800)
+}
+
 app = FastAPI(title="FunASR Remote Server")
 
 print("🔄 Loading FunASR models on Server...")
 # Load models (use GPU if available)
 model = AutoModel(
     model=MODEL_ID,
-    # vad_model=VAD_MODEL_ID, # Optional: Enable VAD on server if strictly needed, but client chunks usually suffice
+    vad_model=VAD_MODEL_ID,
+    vad_kwargs=VAD_KWARGS,
     trust_remote_code=True,
-    device="cuda", # Default to GPU on workstation
+    device="cuda",
     disable_update=True
 )
 print("✅ Models loaded!")
+print(f"   VAD config: max_end_silence_time={VAD_KWARGS['max_end_silence_time']}ms")
 
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...), language: str = Form("zh")):

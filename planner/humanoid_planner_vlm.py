@@ -42,7 +42,8 @@ class AutonomousVLMPlanner:
                  model_name: str = os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
                  simulation_mode: bool = True,
                  verbose: bool = True,
-                 volume: float = 0.1):
+                 volume: float = 0.1,
+                 asr: Optional['FunASRManager'] = None):
         """
         Initialize VLM-based autonomous planner
 
@@ -52,7 +53,10 @@ class AutonomousVLMPlanner:
             simulation_mode: Use simulation images (True) or real camera (False)
             verbose: Print detailed logs
             volume: TTS playback volume (0.0 to 1.0)
+            asr: Optional FunASRManager for voice command detection during execution
         """
+        # Store ASR reference for checking commands during execution
+        self.asr = asr
         # Get API key
         self.api_key = api_key or os.getenv("GENAI_API_KEY")
         if not self.api_key:
@@ -105,6 +109,7 @@ class AutonomousVLMPlanner:
         self.task_start_time = None
         self.waiting_for_human = False
         self.human_question = None
+        self.pending_interrupt_command = None  # New command that interrupted current task
         self.current_location = "Room 01"  # Track location as state (always starts at Room 01)
 
         # Reset executor vision state to default
@@ -140,6 +145,10 @@ class AutonomousVLMPlanner:
         else:
             return self.plan_next_step()
 
+    def set_asr(self, asr: 'FunASRManager'):
+        """Set ASR manager for voice command detection during execution"""
+        self.asr = asr
+
     def _run_autonomous_loop(self) -> Dict:
         """
         Run fully autonomous execution loop until completion or human input needed (Half-Open-Loop Mode)
@@ -149,6 +158,19 @@ class AutonomousVLMPlanner:
             dict: Task completion summary or request for human input
         """
         while not self.is_task_complete and not self.waiting_for_human:
+            # Check for new voice command (interrupt)
+            if self.asr:
+                new_cmd = self.asr.get_command()
+                if new_cmd:
+                    if self.verbose:
+                        print(f"\n🎙️ New voice command detected during execution: {new_cmd}")
+                    self.pending_interrupt_command = new_cmd
+                    return {
+                        "status": "interrupted",
+                        "new_command": new_cmd,
+                        "step_count": self.step_count
+                    }
+
             # Get current observation image (reflects assumed state after last action)
             current_observation = self.executor.get_current_observation()
             current_image = current_observation['image_path']
@@ -550,6 +572,9 @@ def main():
         asr = FunASRManager(verbose=True)
         asr.start()
 
+        # Connect ASR to planner for interrupt detection
+        planner.set_asr(asr)
+
         print("\n" + "="*70)
         print("🎮 AUTONOMOUS VLM PLANNER - Ready")
         print("="*70)
@@ -620,20 +645,26 @@ def main():
             # Start new task
             result = planner.start_new_task(user_input, run_autonomously=True)
 
+            # Handle interruption - start new task with the interrupting command
+            while result.get("status") == "interrupted":
+                new_cmd = result.get("new_command")
+                print(f"\n🔄 Switching to new task: {new_cmd}")
+                result = planner.start_new_task(new_cmd, run_autonomously=True)
+
             # Handle result (Clarification)
-            if result.get("status") == "waiting_for_human":
+            while result.get("status") == "waiting_for_human":
                 # For clarification, we also want to allow voice/keyboard
                 print(f"\n❓ {result['question']}")
                 print("Your response (speak or type) > ", end="", flush=True)
                 
                 response = None
                 while not response:
-                    # Check voice
-                    v_res = asr.get_command()
+                    # Check voice (use get_speech for responses - no wake word needed)
+                    v_res = asr.get_speech()
                     if v_res:
                         print(f"{v_res} (voice)")
                         response = v_res
-                    
+
                     # Check keyboard
                     rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
                     if rlist:
