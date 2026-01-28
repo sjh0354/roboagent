@@ -14,6 +14,7 @@ import numpy as np
 import io
 import requests
 import scipy.io.wavfile as wav
+from scipy import signal
 from typing import Optional, List
 
 # Audio recording
@@ -55,10 +56,29 @@ class FunASRManager:
             print(f"🌐 FunASR Client configured for server: {self.server_url}")
 
         # Audio configuration
-        self.sample_rate = 16000 
-        
+        self.target_sample_rate = 16000  # Server expects 16kHz
+        self.device_sample_rate = 16000  # Will be updated based on device
+        self.device_id = None
+
         if not SOUNDDEVICE_AVAILABLE:
             print("❌ Error: 'sounddevice' not installed. Cannot capture audio.")
+        else:
+            # Find Loostone microphone
+            try:
+                devices = sd.query_devices()
+                for i, dev in enumerate(devices):
+                    if "Loostone" in dev['name'] and dev['max_input_channels'] > 0:
+                        self.device_id = i
+                        self.device_sample_rate = int(dev['default_samplerate'])
+                        if self.verbose:
+                            print(f"🎤 Using microphone: {dev['name']} (Index: {i}, Rate: {self.device_sample_rate}Hz)")
+                        break
+
+                if self.device_id is None and self.verbose:
+                    print("⚠️  Loostone microphone not found. Using default device.")
+            except Exception as e:
+                if self.verbose:
+                    print(f"⚠️  Error querying audio devices: {e}")
 
     def start(self):
         """Start the continuous listening thread"""
@@ -96,12 +116,13 @@ class FunASRManager:
         
         while self.is_listening:
             try:
-                # 1. Record Audio
+                # 1. Record Audio at device's native sample rate
                 recording = sd.rec(
-                    int(chunk_duration * self.sample_rate), 
-                    samplerate=self.sample_rate,
+                    int(chunk_duration * self.device_sample_rate),
+                    samplerate=self.device_sample_rate,
                     channels=1,
-                    dtype='float32'
+                    dtype='float32',
+                    device=self.device_id
                 )
                 sd.wait() 
                 
@@ -138,10 +159,15 @@ class FunASRManager:
     def _infer_remote(self, audio_data: np.ndarray) -> str:
         """Send audio to remote server and get transcription"""
         try:
+            # Resample to target rate if needed
+            if self.device_sample_rate != self.target_sample_rate:
+                num_samples = int(len(audio_data) * self.target_sample_rate / self.device_sample_rate)
+                audio_data = signal.resample(audio_data, num_samples)
+
             # Convert float32 numpy to WAV bytes
             audio_int16 = (audio_data * 32767).astype(np.int16)
             byte_io = io.BytesIO()
-            wav.write(byte_io, self.sample_rate, audio_int16)
+            wav.write(byte_io, self.target_sample_rate, audio_int16)
             byte_io.seek(0)
             
             files = {'file': ('chunk.wav', byte_io, 'audio/wav')}
