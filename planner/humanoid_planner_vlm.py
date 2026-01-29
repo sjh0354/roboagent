@@ -43,6 +43,7 @@ class AutonomousVLMPlanner:
                  simulation_mode: bool = True,
                  verbose: bool = True,
                  volume: float = 0.1,
+                 voice: str = "female",
                  asr: Optional['FunASRManager'] = None):
         """
         Initialize VLM-based autonomous planner
@@ -53,6 +54,7 @@ class AutonomousVLMPlanner:
             simulation_mode: Use simulation images (True) or real camera (False)
             verbose: Print detailed logs
             volume: TTS playback volume (0.0 to 1.0)
+            voice: Voice tone (default: 'female')
             asr: Optional FunASRManager for voice command detection during execution
         """
         # Store ASR reference for checking commands during execution
@@ -88,7 +90,8 @@ class AutonomousVLMPlanner:
             verbose=verbose,
             enable_vision=True,
             vlm_model=model_name,
-            volume=volume
+            volume=volume,
+            voice=voice
         )
 
         # Conversation state

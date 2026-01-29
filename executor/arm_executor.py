@@ -52,7 +52,7 @@ class ArmExecutor:
     - Perception (sense)
     """
 
-    def __init__(self, simulation_mode=True, verbose=True, volume=1.0):
+    def __init__(self, simulation_mode=True, verbose=True, volume=1.0, voice="male"):
         """
         Initialize arm executor
 
@@ -60,10 +60,12 @@ class ArmExecutor:
             simulation_mode: If True, simulate actions; if False, execute on real hardware
             verbose: Print execution details
             volume: TTS playback volume (0.0 to 1.0)
+            voice: Voice tone (e.g., 'male', 'female')
         """
         self.simulation_mode = simulation_mode
         self.verbose = verbose
         self.volume = volume
+        self.voice = voice
 
         # Hardware/API clients would be initialized here
         self.robot_controller = None
@@ -77,7 +79,7 @@ class ArmExecutor:
         self.tts_manager = None
         if TTSManager:
             try:
-                self.tts_manager = TTSManager(verbose=verbose, volume=volume)
+                self.tts_manager = TTSManager(verbose=verbose, volume=volume, voice=voice)
             except Exception as e:
                 if verbose:
                     print(f"⚠️  TTS Manager initialization failed: {e}")
@@ -87,7 +89,7 @@ class ArmExecutor:
 
         if verbose:
             mode = "SIMULATION" if simulation_mode else "REAL HARDWARE"
-            print(f"✅ ArmExecutor initialized in {mode} mode")
+            print(f"✅ ArmExecutor initialized in {mode} mode (voice={voice})")
 
     def _initialize_hardware(self):
         """Initialize connections to real hardware/APIs"""

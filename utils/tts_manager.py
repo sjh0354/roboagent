@@ -29,7 +29,13 @@ class TTSManager:
     Manages Text-to-Speech synthesis
     """
 
-    def __init__(self, verbose: bool = True, preferred_backend: str = "auto", volume: float = 1.0):
+    # Voice mapping for common tones (using CosyVoice v3 flash voices)
+    VOICE_MAPPING = {
+        "female": "longanhuan",    # Standard female
+        "male": "longanyang",      # Standard male
+    }
+
+    def __init__(self, verbose: bool = True, preferred_backend: str = "auto", volume: float = 1.0, voice: str = "female"):
         """
         Initialize TTS Manager
 
@@ -37,10 +43,14 @@ class TTSManager:
             verbose: Print status messages
             preferred_backend: 'dashscope', 'system', or 'auto'
             volume: Default playback volume (0.0 to 1.0)
+            voice: Default voice name or mapping key ('male', 'female', etc.)
         """
         self.verbose = verbose
         self.preferred_backend = preferred_backend
         self.volume = max(0.0, min(1.0, volume)) # Clamp between 0.0 and 1.0
+        
+        # Resolve voice
+        self.voice = self.VOICE_MAPPING.get(voice, voice)
         
         # Check API key for DashScope
         self.api_key = os.getenv("DASHSCOPE_API_KEY")
@@ -55,6 +65,7 @@ class TTSManager:
         print(f"   - API Key: {'✅ Found' if self.api_key else '❌ Not found (DASHSCOPE_API_KEY)'}")
         print(f"   - System TTS: {'✅ Available (espeak)' if self._check_espeak() else '⚠️ Not found'}")
         print(f"   - Volume: {int(self.volume * 100)}%")
+        print(f"   - Default Voice: {self.voice}")
 
     def _check_espeak(self) -> bool:
         """Check if espeak is available"""
@@ -64,30 +75,34 @@ class TTSManager:
         except subprocess.CalledProcessError:
             return False
 
-    def speak(self, text: str, model: str = "cosyvoice-v1", block: bool = False, volume: Optional[float] = None):
+    def speak(self, text: str, model: str = "cosyvoice-v3-flash", block: bool = False, volume: Optional[float] = None, voice: Optional[str] = None):
         """
         Speak the given text
 
         Args:
             text: Text to speak
-            model: Model name for DashScope (e.g., 'cosyvoice-v1', 'sambert-zh-v1')
+            model: Model name for DashScope (default: 'cosyvoice-v3-flash')
             block: If True, wait for speech to finish (not fully supported for all backends)
             volume: Override default volume (0.0 to 1.0), if None use self.volume
+            voice: Override default voice
         """
         if not text:
             return
 
         # Determine volume
         current_volume = self.volume if volume is None else max(0.0, min(1.0, volume))
+        
+        # Determine voice
+        current_voice = self.voice if voice is None else self.VOICE_MAPPING.get(voice, voice)
 
         # Determine backend
         backend = self._choose_backend()
         
         if self.verbose:
-            print(f"🗣️  Speaking ({backend}, vol={current_volume:.1f}): \"{text}\"")
+            print(f"🗣️  Speaking ({backend}, vol={current_volume:.1f}, voice={current_voice}): \"{text}\"")
 
         if backend == "dashscope":
-            self._speak_dashscope(text, model, block, current_volume)
+            self._speak_dashscope(text, model, block, current_volume, current_voice)
         elif backend == "system":
             self._speak_system(text, block, current_volume)
         else:
@@ -108,7 +123,7 @@ class TTSManager:
         else:
             return "mock"
 
-    def _speak_dashscope(self, text: str, model: str, block: bool, volume: float):
+    def _speak_dashscope(self, text: str, model: str, block: bool, volume: float, voice: str):
         """Speak using DashScope API (CosyVoice)"""
         if not DASHSCOPE_AVAILABLE:
             if self.verbose:
@@ -122,9 +137,8 @@ class TTSManager:
                 filename = f"/tmp/tts_{uuid.uuid4()}.wav"
                 
                 # Configure synthesizer
-                # Note: 'cosyvoice-v1' might be the specific model name user wants
-                # format should be passed to constructor for tts_v2
-                synthesizer = SpeechSynthesizer(model=model, voice='longxiaochun', format=AudioFormat.WAV_16000HZ_MONO_16BIT) 
+                # Use passed voice parameter
+                synthesizer = SpeechSynthesizer(model=model, voice=voice, format=AudioFormat.WAV_16000HZ_MONO_16BIT) 
                 
                 # Call API
                 # The 5s timeout seems to be a hard limit for connection in some SDK versions.

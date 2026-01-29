@@ -30,7 +30,8 @@ class VisionEnabledArmExecutor(ArmExecutor):
                  verbose: bool = True,
                  enable_vision: bool = True,
                  vlm_model: str = os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
-                 volume: float = 1.0):
+                 volume: float = 1.0,
+                 voice: str = "male"):
         """
         Initialize vision-enabled arm executor
 
@@ -40,9 +41,10 @@ class VisionEnabledArmExecutor(ArmExecutor):
             enable_vision: Enable vision-based observation
             vlm_model: VLM model to use (default: from env DEFAULT_VLM_MODEL or gemini-2.0-flash-exp)
             volume: TTS playback volume (0.0 to 1.0)
+            voice: Voice tone (e.g., 'male', 'female')
         """
         # Initialize base executor
-        super().__init__(simulation_mode=simulation_mode, verbose=verbose, volume=volume)
+        super().__init__(simulation_mode=simulation_mode, verbose=verbose, volume=volume, voice=voice)
 
         self.enable_vision = enable_vision
         self.vlm_model = vlm_model
