@@ -205,7 +205,7 @@ class HumanoidExecutor:
             
             # Optional: Play TTS in simulation too (non-blocking)
             if self.tts_manager:
-                self.tts_manager.speak(message, model="cosyvoice-v1", block=False)
+                self.tts_manager.speak(message, model="cosyvoice-v3-flash", block=False)
 
             # Detect if this is a store request based on message content
             is_store_request = any(keyword in message.lower() for keyword in ['get', 'please', 'request', 'need'])
@@ -227,7 +227,7 @@ class HumanoidExecutor:
             # Real implementation
             print(f"🗣️  Speaking: \"{message}\"")
             if self.tts_manager:
-                self.tts_manager.speak(message, model="cosyvoice-v1", block=True)
+                self.tts_manager.speak(message, model="cosyvoice-v3-flash", block=True, voice=self.voice, volume=self.volume)
             
             return ExecutionResult(
                 success=True,
@@ -290,7 +290,6 @@ class HumanoidExecutor:
             # - Smart home API (HomeKit, Google Home, custom protocol)
             self.smart_home_controller.control_ac(action, temperature)
             #raise NotImplementedError("Real AC control not yet implemented")
-            print("⚠️  Real AC control successfully")
             return ExecutionResult(
                 success=True,
                 feedback=f"Real AC control executed: {action} {temperature if temperature else ''}",
@@ -324,7 +323,6 @@ class HumanoidExecutor:
             # TODO: Real implementation
             # self.smart_home_controller.control_light(action)
             self.smart_home_controller.control_light(action)
-            print("⚠️  Real light control successfully")
             return ExecutionResult(
                 success=True,
                 feedback=f"Real light control executed: {action}",
@@ -520,7 +518,9 @@ class HumanoidExecutor:
             # - Obstacle avoidance
             # - Grip stability monitoring if carrying item
             # self.robot_controller.navigate_to(target_location, carrying=with_item)
+            time.sleep(40)  # Simulate travel time
             raise NotImplementedError("Real navigation not yet implemented")
+            
 
     def _wait_for(self, estimated_time: int, reason: str) -> ExecutionResult:
         """

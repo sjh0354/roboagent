@@ -221,7 +221,7 @@ class AutonomousVLMPlanner:
 
                 # Speak the question if we haven't just spoken it via an action
                 if not just_spoke and self.human_question and hasattr(self.executor, 'tts_manager') and self.executor.tts_manager:
-                     self.executor.tts_manager.speak(self.human_question, model="cosyvoice-v1", block=False)
+                     self.executor.tts_manager.speak(self.human_question, model="cosyvoice-v3-flash", block=False, voice="female", volume=0.1)
 
                 return step_plan
 
