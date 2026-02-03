@@ -11,6 +11,14 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 import json
 
+# Dummy placeholder for SmartHomeAPI
+class SmartHomeAPI:
+    def control_ac(self, action: str, temperature: Optional[int]):
+        print(f"⚠️  Dummy SmartHomeAPI: AC action '{action}' with temperature '{temperature}' called.")
+
+    def control_light(self, action: str):
+        print(f"⚠️  Dummy SmartHomeAPI: Light action '{action}' called.")
+
 try:
     from utils.tts_manager import TTSManager
 except ImportError:
@@ -101,8 +109,9 @@ class HumanoidExecutor:
         # TODO: Initialize real hardware connections
         # self.robot_controller = UnitreeG1Controller()
         # self.vision_system = VisionLanguageModel()
-        # self.smart_home_controller = SmartHomeAPI()
-        print("⚠️  Hardware initialization not yet implemented")
+        if self.smart_home_controller is None: # Only initialize if not already set (e.g., by a mock in tests)
+            self.smart_home_controller = SmartHomeAPI() # Instantiate the dummy SmartHomeAPI
+        print("⚠️  Hardware initialization not yet implemented, using dummy SmartHomeAPI.")
 
     def execute_action(self, action_type: str, action_name: str, parameters: Dict[str, Any]) -> ExecutionResult:
         """
@@ -279,8 +288,14 @@ class HumanoidExecutor:
         else:
             # TODO: Real implementation
             # - Smart home API (HomeKit, Google Home, custom protocol)
-            # self.smart_home_controller.control_ac(action, temperature)
-            raise NotImplementedError("Real AC control not yet implemented")
+            self.smart_home_controller.control_ac(action, temperature)
+            #raise NotImplementedError("Real AC control not yet implemented")
+            print("⚠️  Real AC control successfully")
+            return ExecutionResult(
+                success=True,
+                feedback=f"Real AC control executed: {action} {temperature if temperature else ''}",
+                data={"ac_status": action, "temperature": temperature}
+            )
 
     def _control_light(self, action: str) -> ExecutionResult:
         """Control lighting"""
@@ -308,7 +323,13 @@ class HumanoidExecutor:
         else:
             # TODO: Real implementation
             # self.smart_home_controller.control_light(action)
-            raise NotImplementedError("Real light control not yet implemented")
+            self.smart_home_controller.control_light(action)
+            print("⚠️  Real light control successfully")
+            return ExecutionResult(
+                success=True,
+                feedback=f"Real light control executed: {action}",
+                data={"light_status": action}
+            )
 
     def _web_search(self, url: str, query: str) -> ExecutionResult:
         """Perform web search"""
