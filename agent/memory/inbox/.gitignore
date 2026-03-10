@@ -1,0 +1,5 @@
+global/*.md
+hardware/*.md
+!README.md
+!global/.gitkeep
+!hardware/.gitkeep

@@ -7,6 +7,9 @@ VLM planner that receives direct visual observations for autonomous planning
 
 import json
 
+from template.modular_prompt_loader import build_modular_system_prompt
+from utils.action_registry import get_allowed_actions
+
 HUMANOID_VLM_SYSTEM_PROMPT = """
 # Vision-Based Autonomous Humanoid Robot Task Planner (Unitree-G1)
 
@@ -445,6 +448,14 @@ Begin planning!
 
 def get_humanoid_vlm_system_prompt():
     """Get the VLM-based system prompt"""
+    return build_modular_system_prompt(
+        profile_name="humanoid_g1",
+        legacy_prompt=HUMANOID_VLM_SYSTEM_PROMPT,
+    )
+
+
+def get_humanoid_legacy_system_prompt():
+    """Get the legacy monolithic humanoid prompt."""
     return HUMANOID_VLM_SYSTEM_PROMPT
 
 
@@ -511,17 +522,7 @@ def validate_vlm_response(response_text):
         tuple: (is_valid, message)
     """
     # Define allowed actions
-    ALLOWED_ACTIONS = {
-        "speak",
-        "control_air_conditioner",
-        "control_light",
-        "web_search",
-        "navigate_to",
-        "wait_for",
-        "get_observation",
-        "pick",
-        "place"
-    }
+    ALLOWED_ACTIONS = set(get_allowed_actions("humanoid_g1"))
 
     try:
         # Clean and parse JSON

@@ -7,6 +7,9 @@ VLM planner that receives direct visual observations for autonomous planning
 
 import json
 
+from template.modular_prompt_loader import build_modular_system_prompt
+from utils.action_registry import get_allowed_actions
+
 ARM_VLM_SYSTEM_PROMPT = """
 # Vision-Based Autonomous Robotic Arm Task Planner (UR5e)
 
@@ -320,6 +323,14 @@ Begin planning!
 
 def get_arm_vlm_system_prompt():
     """Get the VLM-based system prompt for arm"""
+    return build_modular_system_prompt(
+        profile_name="ur5e",
+        legacy_prompt=ARM_VLM_SYSTEM_PROMPT,
+    )
+
+
+def get_arm_legacy_system_prompt():
+    """Get the legacy monolithic arm prompt."""
     return ARM_VLM_SYSTEM_PROMPT
 
 
@@ -386,11 +397,7 @@ def validate_arm_vlm_response(response_text):
         tuple: (is_valid, message)
     """
     # Define allowed actions for arm (3 actions only)
-    ALLOWED_ACTIONS = {
-        "speak",
-        "pick_and_place",
-        "get_observation"
-    }
+    ALLOWED_ACTIONS = set(get_allowed_actions("ur5e"))
 
     try:
         # Clean and parse JSON
