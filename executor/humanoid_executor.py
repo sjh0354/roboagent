@@ -24,6 +24,16 @@ try:
 except ImportError:
     TTSManager = None
 
+try:
+    from utils.dabai_camera_manager import DaBaiCameraManager
+except ImportError:
+    DaBaiCameraManager = None
+
+try:
+    from utils.gemini_vlm_client import GeminiVLMClient
+except ImportError:
+    GeminiVLMClient = None
+
 
 class ExecutionResult:
     """Structured result from action execution"""

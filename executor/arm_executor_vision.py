@@ -300,6 +300,38 @@ class VisionEnabledArmExecutor(ArmExecutor):
 
         return observation_data
 
+    def _get_observation(self) -> ExecutionResult:
+        """Capture and analyze visual scene using real camera/VLM"""
+        # Get raw observation data (image path, vlm description)
+        obs_data = self.get_current_observation()
+        
+        image_path = obs_data.get('image_path')
+        vlm_desc = obs_data.get('vlm_description')
+        
+        if not image_path:
+             return ExecutionResult(
+                success=False,
+                feedback="Failed to capture observation image",
+                error="Camera capture returned None"
+            )
+
+        # Construct feedback
+        feedback = f"Observation captured: {image_path}"
+        if vlm_desc:
+            feedback += f"\nScene Description: {vlm_desc}"
+        else:
+            feedback += "\n(No VLM description available)"
+
+        return ExecutionResult(
+            success=True,
+            feedback=feedback,
+            data={
+                "observation_image": image_path,
+                "vlm_observation": vlm_desc,
+                "observation": vlm_desc if vlm_desc else "Image captured but VLM analysis unavailable."
+            }
+        )
+
     def close(self):
         """Cleanup resources"""
         if self.camera_manager:
