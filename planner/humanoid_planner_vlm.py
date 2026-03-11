@@ -7,6 +7,7 @@ Uses VLM (Vision-Language Model) with direct visual observations for planning
 
 import os
 import sys
+import time
 # Add parent directory to path to allow imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -143,7 +144,7 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
             }
         return None
 
-    def _prepare_current_observation(self) -> str:
+    def _prepare_current_observation(self):
         current_observation = self.executor.get_current_observation()
         current_image = current_observation['image_path']
         if 'state' in current_observation and 'location' in current_observation['state']:
@@ -157,6 +158,10 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
         if self.verbose:
             print(f"\n📸 Current observation image: {current_image}")
             print(f"📍 Current location (from state): {self.current_location}")
+        if self.transient_memory_packet:
+            packet = dict(self.transient_memory_packet)
+            packet["primary_image"] = packet.get("primary_image") or current_image
+            return packet
         return current_image
 
     def _get_current_image_for_planning(self) -> str:
@@ -203,17 +208,27 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
             print(f"✓ Assumed: SUCCESS (no verification)")
             print("="*70 + "\n")
 
+        step_started_at = time.time()
         # Execute using vision-enabled executor
         execution_result = self.executor.execute_action(
             next_step.get("action_type"),
             next_step.get("action"),
             next_step.get("parameters", {})
         )
+        step_finished_at = time.time()
 
         # Add result to history (for logging purposes)
         self.execution_history[-1]["execution_result"] = execution_result.to_dict()
         # Mark as assumed successful
         self.execution_history[-1]["assumed_successful"] = True
+        self.execution_history[-1]["duration_seconds"] = round(step_finished_at - step_started_at, 2)
+
+        self.transient_memory_packet = self._build_transient_memory_packet(
+            action_name=next_step.get("action", "unknown"),
+            start_ts=step_started_at,
+            end_ts=step_finished_at,
+            primary_image=execution_result.data.get("observation_image"),
+        )
 
         # Update location state after navigate_to action
         if next_step.get("action") == "navigate_to":
@@ -258,9 +273,13 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
         # Current status
         context_parts.append(f"\n[CURRENT STATUS]: Planning step #{self.step_count + 1}")
 
+        transient_memory_context = self._build_transient_memory_context()
+        if transient_memory_context:
+            context_parts.append(f"\n{transient_memory_context}")
+
         # Instruction
         context_parts.append(
-            "\n[INSTRUCTION]: Based on the visual observation (image provided above) and execution history, "
+            "\n[INSTRUCTION]: Based on the visual observation (image(s) provided above) and execution history, "
             "plan the NEXT SINGLE STEP. Use the JSON format specified in the system prompt."
         )
 
@@ -339,6 +358,11 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
 
     def _get_current_location_for_prompt(self) -> Optional[str]:
         return self.current_location
+
+    def _get_transient_memory_frames(self, start_ts: float, end_ts: float):
+        if hasattr(self.executor, "get_buffered_observations_between"):
+            return self.executor.get_buffered_observations_between(start_ts, end_ts, max_frames=6)
+        return []
 
     def _get_summary_extras(self) -> Dict:
         return {"vision_statistics": self.executor.get_vision_statistics()}

@@ -7,6 +7,7 @@ import time
 from typing import Any, Dict, Optional
 
 from utils.gemini_vlm_client import GeminiVLMClient
+from utils.observation_buffer import ObservationBuffer, ObservationFrame, now_ts
 from utils.simulation_image_manager import SimulationImageManager
 
 
@@ -17,6 +18,12 @@ class VisionEnabledMixin:
         self.vlm_client = None
         self.image_manager = None
         self.camera_manager = None
+        self.observation_buffer = ObservationBuffer(
+            max_frames=int(os.getenv("TRANSIENT_MEMORY_BUFFER_MAX_FRAMES", "120"))
+        )
+        self.observation_sampling_interval = float(os.getenv("TRANSIENT_MEMORY_SAMPLE_INTERVAL", "5.0"))
+        self._observation_buffer_thread = None
+        self._observation_buffer_running = False
 
         try:
             api_key = os.getenv("GENAI_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
@@ -45,6 +52,7 @@ class VisionEnabledMixin:
                 verbose=self.verbose,
             )
             self._initialize_simulation_state()
+            self._start_observation_buffer()
         except Exception as error:
             if self.verbose:
                 print(f"⚠️  Vision system initialization failed: {str(error)}")
@@ -88,35 +96,19 @@ class VisionEnabledMixin:
 
     def get_current_observation(self) -> Dict[str, Any]:
         """Get current visual observation."""
-        if not self.simulation_mode and self.camera_manager:
-            observation_image = self.camera_manager.capture_image()
-            if not observation_image:
-                if self.verbose:
-                    print("⚠️  Camera capture failed, using previous state or None")
-                observation_image = None
-        elif self.image_manager:
-            observation_image = self.image_manager.get_current_observation_image()
-        else:
+        observation_data = self._capture_observation_snapshot(include_vlm_description=True)
+        if observation_data is None:
             return {
                 "image_path": None,
                 "state": {},
                 "vlm_description": "Vision system not initialized",
             }
-
-        observation_data = {
-            "image_path": observation_image,
-            "state": self.image_manager.state.copy() if self.image_manager else {},
-            "vlm_description": None,
-        }
-
-        if self.vlm_client and observation_image and os.path.exists(observation_image):
-            try:
-                observation_data["vlm_description"] = self.vlm_client.get_observation_description(observation_image)
-            except Exception as error:
-                if self.verbose:
-                    print(f"⚠️  VLM observation failed: {str(error)}")
-
         return observation_data
+
+    def get_buffered_observations_between(self, start_ts: float, end_ts: float, max_frames: int = 6):
+        if not getattr(self, "observation_buffer", None):
+            return []
+        return self.observation_buffer.get_frames_between(start_ts, end_ts, max_frames=max_frames)
 
     def _get_observation(self):
         """Capture and analyze visual scene using camera/VLM."""
@@ -164,6 +156,7 @@ class VisionEnabledMixin:
         return stats
 
     def close(self):
+        self._stop_observation_buffer()
         if self.camera_manager:
             self.camera_manager.close()
 
@@ -182,3 +175,74 @@ class VisionEnabledMixin:
         error: Optional[str] = None,
     ):
         raise NotImplementedError
+
+    def _start_observation_buffer(self):
+        if self._observation_buffer_running:
+            return
+        self._observation_buffer_running = True
+        self._capture_buffer_frame(source="initial")
+        import threading
+
+        self._observation_buffer_thread = threading.Thread(
+            target=self._observation_buffer_loop,
+            daemon=True,
+        )
+        self._observation_buffer_thread.start()
+        if self.verbose:
+            print(
+                f"🧠 Transient observation buffer started "
+                f"(interval={self.observation_sampling_interval:.1f}s)"
+            )
+
+    def _stop_observation_buffer(self):
+        self._observation_buffer_running = False
+        if self._observation_buffer_thread:
+            self._observation_buffer_thread.join(timeout=1.0)
+            self._observation_buffer_thread = None
+
+    def _observation_buffer_loop(self):
+        while self._observation_buffer_running:
+            time.sleep(self.observation_sampling_interval)
+            if not self._observation_buffer_running:
+                break
+            self._capture_buffer_frame(source="interval")
+
+    def _capture_buffer_frame(self, source: str = "buffer") -> Optional[ObservationFrame]:
+        observation = self._capture_observation_snapshot(include_vlm_description=False)
+        if not observation:
+            return None
+        frame = ObservationFrame(
+            timestamp=now_ts(),
+            image_path=observation.get("image_path"),
+            state=observation.get("state") or {},
+            source=source,
+        )
+        self.observation_buffer.add_frame(frame)
+        return frame
+
+    def _capture_observation_snapshot(self, include_vlm_description: bool = False) -> Optional[Dict[str, Any]]:
+        if not self.simulation_mode and self.camera_manager:
+            observation_image = self.camera_manager.capture_image()
+            if not observation_image:
+                if self.verbose:
+                    print("⚠️  Camera capture failed, using previous state or None")
+                observation_image = None
+        elif self.image_manager:
+            observation_image = self.image_manager.get_current_observation_image()
+        else:
+            return None
+
+        observation_data = {
+            "image_path": observation_image,
+            "state": self.image_manager.state.copy() if self.image_manager else {},
+            "vlm_description": None,
+        }
+
+        if include_vlm_description and self.vlm_client and observation_image and os.path.exists(observation_image):
+            try:
+                observation_data["vlm_description"] = self.vlm_client.get_observation_description(observation_image)
+            except Exception as error:
+                if self.verbose:
+                    print(f"⚠️  VLM observation failed: {str(error)}")
+
+        return observation_data

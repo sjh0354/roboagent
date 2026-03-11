@@ -141,6 +141,7 @@ When using native `lark` transport:
 - local `speak` responses are mirrored back into the current group chat
 - group-chat messages are only consumed when the bot is `@` mentioned
 - `send_agent_message(recipient=...)` sends a structured message like `@ur5e [agent:g1] [to:ur5e] ...`
+- long-running actions can attach transient visual memory: ordered frames sampled every few seconds during execution
 
 Environment layout:
 
@@ -151,6 +152,12 @@ Environment layout:
 - `env/planner.env.sh`: backward-compatible default that currently points to G1
 - `env/lark.env.sh`: native Lark gateway and bridge config such as `LARK_ACCOUNT_IDS`, bot `APP_ID`, `APP_SECRET`
 - `apikey.sh`: compatibility entry that sources all three files above
+
+Transient memory tuning:
+
+- `TRANSIENT_MEMORY_SAMPLE_INTERVAL`: background image sampling interval in seconds, default `5.0`
+- `TRANSIENT_MEMORY_THRESHOLD_SECONDS`: minimum step duration before buffered frames are sent back to the VLM, default `5.0`
+- `TRANSIENT_MEMORY_BUFFER_MAX_FRAMES`: maximum retained frames in the rolling buffer, default `120`
 
 ## Native Lark Gateway
 

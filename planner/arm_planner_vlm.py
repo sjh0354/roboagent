@@ -137,9 +137,13 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
     def plan_next_step(self) -> Dict:
         return super().plan_next_step()
 
-    def _prepare_current_observation(self) -> str:
+    def _prepare_current_observation(self):
         if self.verbose:
             print(f"\n📸 Current observation: {self.current_observation_image}")
+        if self.transient_memory_packet:
+            packet = dict(self.transient_memory_packet)
+            packet["primary_image"] = packet.get("primary_image") or self.current_observation_image
+            return packet
         return self.current_observation_image
 
     def _get_current_image_for_planning(self) -> str:
@@ -187,12 +191,14 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             print(f"📦 Parameters: {json.dumps(next_step.get('parameters', {}), indent=2)}")
             print("="*70 + "\n")
 
+        step_started_at = time.time()
         # Execute via Executor
         result = self.executor.execute_action(
             next_step.get("action_type"),
             next_step.get("action"),
             next_step.get("parameters", {})
         )
+        step_finished_at = time.time()
         
         # Update observation image based on result
         if result.data.get("observation_image"):
@@ -201,6 +207,13 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         # Mark as assumed successful (half-open loop)
         self.execution_history[-1]["assumed_successful"] = True
         self.execution_history[-1]["execution_result"] = result.to_dict()
+        self.execution_history[-1]["duration_seconds"] = round(step_finished_at - step_started_at, 2)
+        self.transient_memory_packet = self._build_transient_memory_packet(
+            action_name=next_step.get("action", "unknown"),
+            start_ts=step_started_at,
+            end_ts=step_finished_at,
+            primary_image=result.data.get("observation_image") or self.current_observation_image,
+        )
 
         if self.verbose:
             print(f"\n{'='*70}")
@@ -242,11 +255,20 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             print(f"✓ Assumed: SUCCESS (no verification)")
             print("="*70 + "\n")
 
+        step_started_at = time.time()
         # Update observation image based on action (simulation)
         self._update_observation_after_action(next_step)
+        step_finished_at = time.time()
 
         # Mark as assumed successful
         self.execution_history[-1]["assumed_successful"] = True
+        self.execution_history[-1]["duration_seconds"] = round(step_finished_at - step_started_at, 2)
+        self.transient_memory_packet = self._build_transient_memory_packet(
+            action_name=next_step.get("action", "unknown"),
+            start_ts=step_started_at,
+            end_ts=step_finished_at,
+            primary_image=self.current_observation_image,
+        )
 
         if self.verbose:
             print(f"\n{'='*70}")
@@ -300,9 +322,13 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         # Current status
         context_parts.append(f"\n[CURRENT STATUS]: Planning step #{self.step_count + 1}")
 
+        transient_memory_context = self._build_transient_memory_context()
+        if transient_memory_context:
+            context_parts.append(f"\n{transient_memory_context}")
+
         # Instruction
         context_parts.append(
-            "\n[INSTRUCTION]: Based on the visual observation (image provided above) and execution history, "
+            "\n[INSTRUCTION]: Based on the visual observation (image(s) provided above) and execution history, "
             "plan the NEXT SINGLE STEP. Use the JSON format specified in the system prompt."
         )
 
@@ -378,6 +404,11 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
 
     def _get_response_prefix(self) -> str:
         return "HUMANOID RESPONSE"
+
+    def _get_transient_memory_frames(self, start_ts: float, end_ts: float):
+        if hasattr(self.executor, "get_buffered_observations_between"):
+            return self.executor.get_buffered_observations_between(start_ts, end_ts, max_frames=6)
+        return []
 
     def switch_model(self, model_name: str):
         """Switch to different VLM model"""

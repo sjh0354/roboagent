@@ -3,6 +3,7 @@ Shared runtime for modular VLM planners.
 """
 
 import os
+from typing import Any, List
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -52,6 +53,7 @@ class BaseVLMPlanner:
         self.task_start_time = None
         self.memory_candidates = {}
         self.memory_recorded = False
+        self.transient_memory_packet = None
         self._reset_runtime_state()
 
     def start_new_task(self, request: str, run_autonomously: bool = True) -> Dict:
@@ -72,8 +74,8 @@ class BaseVLMPlanner:
             if interrupt_result:
                 return self._finalize_interaction(interrupt_result)
 
-            current_image = self._prepare_current_observation()
-            step_plan = self.plan_next_step_with_image(current_image)
+            observation_input = self._prepare_current_observation()
+            step_plan = self.plan_next_step_with_image(observation_input)
 
             if step_plan.get("error"):
                 if self.verbose:
@@ -130,24 +132,21 @@ class BaseVLMPlanner:
         self.memory_recorded = False
         return self._run_autonomous_loop()
 
-    def plan_next_step_with_image(self, image_path: str) -> Dict:
+    def plan_next_step_with_image(self, observation_input: Any) -> Dict:
         """Shared VLM planning call."""
         if self.is_task_complete:
             if self.verbose:
                 print("⚠️  Task already complete")
             return {"error": "Task already complete"}
 
+        observation_packet = self._normalize_observation_packet(observation_input)
         context_text = self._build_context_message()
         system_prompt = self._build_runtime_system_prompt()
 
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(self.conversation_history)
 
-        user_content = []
-        if os.path.exists(image_path):
-            user_content.append(self.vlm_client.create_image_message(image_path))
-        else:
-            user_content.append({"type": "text", "text": f"[Image not available: {image_path}]"})
+        user_content = self._build_observation_user_content(observation_packet)
         user_content.append({"type": "text", "text": context_text})
         messages.append({"role": "user", "content": user_content})
 
@@ -170,6 +169,7 @@ class BaseVLMPlanner:
             elif step_plan.get("next_step") is None and not step_plan.get("needs_human_input"):
                 self.is_task_complete = True
 
+            self.transient_memory_packet = None
             return step_plan
         except Exception as error:
             error_msg = f"Planning failed: {str(error)}"
@@ -236,6 +236,120 @@ class BaseVLMPlanner:
         action = step_plan.get("next_step", {}).get("action")
         return action in {"speak", "talk_with_human"}
 
+    def _normalize_observation_packet(self, observation_input: Any) -> Dict[str, Any]:
+        if isinstance(observation_input, dict):
+            packet = dict(observation_input)
+            frames = packet.get("frames") or []
+            packet["frames"] = frames
+            packet["primary_image"] = packet.get("primary_image") or (
+                frames[-1].get("image_path") if frames else None
+            )
+            packet["is_sequence"] = len(frames) > 1
+            return packet
+
+        image_path = str(observation_input)
+        return {
+            "primary_image": image_path,
+            "frames": [{"image_path": image_path, "label": "Current frame"}],
+            "is_sequence": False,
+        }
+
+    def _build_observation_user_content(self, observation_packet: Dict[str, Any]) -> List[Dict[str, Any]]:
+        user_content: List[Dict[str, Any]] = []
+        frames = observation_packet.get("frames") or []
+
+        if frames:
+            for index, frame in enumerate(frames, start=1):
+                image_path = frame.get("image_path")
+                label = frame.get("label") or f"Frame {index}"
+                user_content.append({"type": "text", "text": f"[{label}]"})
+                if image_path and os.path.exists(image_path):
+                    user_content.append(self.vlm_client.create_image_message(image_path))
+                else:
+                    user_content.append({"type": "text", "text": f"Image not available: {image_path}"})
+        else:
+            image_path = observation_packet.get("primary_image")
+            if image_path and os.path.exists(image_path):
+                user_content.append(self.vlm_client.create_image_message(image_path))
+            else:
+                user_content.append({"type": "text", "text": f"[Image not available: {image_path}]"})
+
+        summary_text = observation_packet.get("summary_text")
+        if summary_text:
+            user_content.append({"type": "text", "text": summary_text})
+        return user_content
+
+    def _build_transient_memory_context(self) -> Optional[str]:
+        packet = self.transient_memory_packet
+        if not packet or not packet.get("frames"):
+            return None
+
+        lines = [
+            "[TRANSIENT VISUAL MEMORY]",
+            packet.get("summary_text", "").strip(),
+        ]
+        for frame in packet.get("frames", []):
+            label = frame.get("label")
+            if label:
+                lines.append(f"  - {label}")
+        return "\n".join(line for line in lines if line)
+
+    def _build_transient_memory_packet(
+        self,
+        action_name: str,
+        start_ts: float,
+        end_ts: float,
+        primary_image: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        duration = end_ts - start_ts
+        threshold = float(os.getenv("TRANSIENT_MEMORY_THRESHOLD_SECONDS", "5.0"))
+        if duration < threshold:
+            return None
+
+        frames = self._get_transient_memory_frames(start_ts, end_ts)
+        prepared_frames = self._prepare_transient_frames(frames)
+        if primary_image and (
+            not prepared_frames or prepared_frames[-1].get("image_path") != primary_image
+        ):
+            prepared_frames.append(
+                {
+                    "image_path": primary_image,
+                    "label": f"Frame {len(prepared_frames) + 1} - t=+{duration:.0f}s",
+                }
+            )
+
+        if len(prepared_frames) < 2:
+            return None
+
+        return {
+            "primary_image": primary_image or prepared_frames[-1].get("image_path"),
+            "frames": prepared_frames,
+            "is_sequence": True,
+            "summary_text": f"Long action '{action_name}' took {duration:.1f}s",
+        }
+
+    def _get_transient_memory_frames(self, start_ts: float, end_ts: float) -> List[Any]:
+        return []
+
+    def _prepare_transient_frames(self, frames: List[Any]) -> List[Dict[str, Any]]:
+        prepared: List[Dict[str, Any]] = []
+        if not frames:
+            return prepared
+
+        base_ts = frames[0].timestamp
+        for index, frame in enumerate(frames, start=1):
+            image_path = getattr(frame, "image_path", None)
+            if not image_path:
+                continue
+            delta = max(0.0, getattr(frame, "timestamp", base_ts) - base_ts)
+            prepared.append(
+                {
+                    "image_path": image_path,
+                    "label": f"Frame {index} - t=+{delta:.0f}s",
+                }
+            )
+        return prepared
+
     def _check_interrupt(self) -> Optional[Dict]:
         return None
 
@@ -254,7 +368,7 @@ class BaseVLMPlanner:
     def _print_task_started(self, request: str):
         raise NotImplementedError
 
-    def _prepare_current_observation(self) -> str:
+    def _prepare_current_observation(self) -> Any:
         raise NotImplementedError
 
     def _get_current_image_for_planning(self) -> str:
