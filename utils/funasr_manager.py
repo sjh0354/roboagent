@@ -16,6 +16,7 @@ import requests
 import scipy.io.wavfile as wav
 from scipy import signal
 from typing import Optional, List
+from urllib.parse import urlparse
 
 # Audio recording
 try:
@@ -56,7 +57,8 @@ class FunASRManager:
         self.speech_queue = queue.Queue()  # All recognized speech (no wake word filter)
         
         # Resolve server URL
-        self.server_url = server_url or os.getenv("ASR_SERVER_URL")
+        raw_server_url = server_url or os.getenv("ASR_SERVER_URL")
+        self.server_url = self._normalize_server_url(raw_server_url)
         if not self.server_url:
             print("⚠️  Warning: ASR_SERVER_URL not set. Remote inference will fail.")
         elif self.verbose:
@@ -86,6 +88,27 @@ class FunASRManager:
             except Exception as e:
                 if self.verbose:
                     print(f"⚠️  Error querying audio devices: {e}")
+
+    def _normalize_server_url(self, server_url: Optional[str]) -> Optional[str]:
+        """Normalize ASR server URL for client access."""
+        if not server_url:
+            return None
+
+        normalized = server_url.strip()
+        if not normalized:
+            return None
+
+        if "://" not in normalized:
+            normalized = f"http://{normalized}"
+
+        parsed = urlparse(normalized)
+        if parsed.hostname == "0.0.0.0":
+            replacement_host = "127.0.0.1"
+            normalized = normalized.replace("0.0.0.0", replacement_host, 1)
+            if self.verbose:
+                print(f"🔧 ASR server host normalized: 0.0.0.0 -> {replacement_host}")
+
+        return normalized.rstrip("/")
 
     def start(self):
         """Start the continuous listening thread"""
