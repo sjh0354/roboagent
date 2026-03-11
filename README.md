@@ -1,96 +1,199 @@
-# Robot Agent System Usage Guide
+# Robot Agent System
 
-This guide explains how to set up and use the Vision-Language Model (VLM) based robot planners for both the Humanoid Robot (Unitree-G1) and the Robotic Arm (UR5e), including how to integrate with a RealSense D435 camera.
+This repository contains a modular embodied-agent system for two hardware profiles:
 
-## 1. Installation & Setup
+- `Unitree-G1` humanoid planner
+- `UR5e` robotic arm planner
 
-### Prerequisites
+The current codebase has been refactored from large in-code prompt templates into
+a modular runtime built around:
+
+- `agent/` for identity, soul, skills, and long-term memory
+- shared planner runtime
+- shared vision executor runtime
+- action schema and dynamic skill resolution
+
+## Requirements
+
 - Python 3.8+
-- Intel RealSense SDK 2.0 (if using real camera)
-- DashScope API Key (for Qwen VLM)
+- `google-genai` access configured through environment variables
+- camera dependencies only if you want real hardware mode
+  - `pyrealsense2` for UR5e RealSense flow
+  - OpenCV / camera dependencies for humanoid camera flow
 
-### Install Dependencies
-Run the following command to install the required Python packages:
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Set API Key
-You must set your DashScope API key environment variable for the VLM to work:
+Set your API key:
 
 ```bash
-export DASHSCOPE_API_KEY='your-dashscope-api-key'
+export GENAI_API_KEY='your-api-key'
 ```
 
-## 2. Testing the Camera
-
-Before running the planners in real-robot mode, verify that your RealSense D435 camera is working correctly.
-
-Run the standalone camera manager script:
+If your environment uses a compatible custom endpoint, you can also set:
 
 ```bash
-python utils/realsense_manager.py
+export GENAI_BASE_URL='your-compatible-endpoint'
 ```
 
-**Expected Output:**
-- The script should initialize the camera.
-- It will capture a test image.
-- It will save the image to the `captured_images/` directory.
-- It will print the path of the saved image.
+## Current Launch Modes
 
-If you see errors like `RuntimeError: No device detected`, check your USB connection.
+Both planners now default to `real` mode.
 
-## 3. Using the Humanoid Planner (Unitree-G1)
+- no extra flag: real hardware mode
+- `--simulation`: simulation mode using local images
+- `--log`: detailed logs
 
-The Humanoid Planner manages navigation, talking, and environment control (AC, lights).
+### Humanoid Planner
 
-### Simulation Mode (Default)
-Runs using pre-captured images from `simulation_images/`.
+Real mode:
 
 ```bash
 python planner/humanoid_planner_vlm.py
 ```
 
-### Real Robot Mode (with Camera)
-To run with the real camera integration, modify the initialization in your script or ensure the `simulation_mode` flag is set to `False` when initializing the planner/executor.
+Simulation mode:
 
-Currently, the `humanoid_planner_vlm.py` main block initializes in simulation mode by default. You can edit the file `humanoid_planner_vlm.py`:
-
-```python
-# In main() function:
-planner = AutonomousVLMPlanner(
-    model_name="qwen-vl-plus",
-    simulation_mode=False,  # <--- Set to False for real camera
-    verbose=True
-)
+```bash
+python planner/humanoid_planner_vlm.py --simulation
 ```
 
-## 4. Using the Robotic Arm Planner (UR5e)
+Simulation mode with full logs:
 
-The Arm Planner manages manipulation tasks like picking items from shelves and placing them on counters.
+```bash
+python planner/humanoid_planner_vlm.py --simulation --log
+```
 
-### Simulation Mode (Default)
+### Arm Planner
+
+Real mode:
+
 ```bash
 python planner/arm_planner_vlm.py
 ```
 
-### Real Robot Mode (with Camera)
-Similar to the humanoid planner, edit `arm_planner_vlm.py` to enable real robot mode:
+Simulation mode:
 
-```python
-# In main() function:
-planner = AutonomousArmVLMPlanner(
-    model_name="qwen-vl-plus",
-    simulation_mode=False,  # <--- Set to False for real camera
-    verbose=True
-)
+```bash
+python planner/arm_planner_vlm.py --simulation
 ```
 
-**Note:** The Arm Planner currently has `_get_default_observation_image` returning a simulation path. Ensure you update it or rely on the autonomous loop which calls `executor.get_current_observation()` (if refactored to use the executor) or `camera_manager.capture_image()` directly if integrated into the planner loop.
+Simulation mode with full logs:
 
-## 5. Troubleshooting
+```bash
+python planner/arm_planner_vlm.py --simulation --log
+```
 
-- **Camera not found:** Ensure `pyrealsense2` is installed and the camera is plugged into a USB 3.0 port.
-- **VLM Errors:** Check your `DASHSCOPE_API_KEY` and internet connection.
-- **Import Errors:** Ensure all files are in the same directory and `requirements.txt` packages are installed.
+## What Simulation Mode Does
+
+Simulation mode uses files under `simulation_images/` instead of real camera input.
+
+This is the safest way to test:
+
+- prompt assembly
+- planner JSON generation
+- end-to-end task flow
+- memory candidate writing
+- CLI interaction behavior
+
+## Current Architecture
+
+### Agent Layer
+
+`agent/` contains modular agent definitions:
+
+- `agent/bootstrap.md`
+- `agent/soul.md`
+- `agent/profiles/...`
+- `agent/skills/...`
+- `agent/memory/...`
+
+### Prompt Runtime
+
+Key files:
+
+- `template/modular_prompt_loader.py`
+- `utils/action_registry.py`
+- `utils/skill_resolver.py`
+
+Behavior:
+
+- runtime system prompts are assembled from modular markdown files
+- relevant skills are loaded dynamically
+- action validation uses a shared schema
+
+### Planner Runtime
+
+Key files:
+
+- `planner/base_vlm_planner.py`
+- `planner/humanoid_planner_vlm.py`
+- `planner/arm_planner_vlm.py`
+
+Behavior:
+
+- shared half-open-loop execution flow
+- profile-specific observation and execution behavior
+- memory candidate writing at interaction boundaries
+
+### Executor Runtime
+
+Key files:
+
+- `executor/vision_enabled_mixin.py`
+- `executor/humanoid_executor_vision.py`
+- `executor/arm_executor_vision.py`
+
+Behavior:
+
+- shared visual observation enhancement
+- image-based scene description
+- simulation image management
+- hardware-specific camera and actuation handling
+
+## Memory
+
+The system now distinguishes three memory layers:
+
+- session memory: conversation context only
+- hardware memory: embodiment-specific stable lessons
+- global memory: long-lived cross-agent lessons
+
+At runtime, new memory candidates are written into:
+
+- `agent/memory/inbox/hardware/`
+- `agent/memory/inbox/global/`
+
+These inbox files are intentionally separate from the stable memory files.
+
+## Useful Commands
+
+Show CLI help:
+
+```bash
+python planner/humanoid_planner_vlm.py --help
+python planner/arm_planner_vlm.py --help
+```
+
+Syntax-check key files:
+
+```bash
+python -m py_compile \
+  planner/base_vlm_planner.py \
+  planner/humanoid_planner_vlm.py \
+  planner/arm_planner_vlm.py \
+  executor/vision_enabled_mixin.py \
+  executor/humanoid_executor_vision.py \
+  executor/arm_executor_vision.py
+```
+
+## Notes
+
+- Real online image analysis and planner generation have been validated in a network-enabled environment.
+- In restricted sandbox environments, Gemini calls may still fail due to DNS/network policy.
+- If you want the most recent refactor summary and testing status, see:
+
+`document/REFACTOR_HANDOFF_2026-03-10.md`

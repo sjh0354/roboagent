@@ -353,9 +353,11 @@ def main():
     import select
 
     parser = argparse.ArgumentParser(description="Autonomous humanoid VLM planner")
+    parser.add_argument("--simulation", action="store_true", help="Run in simulation mode using local simulation images")
     parser.add_argument("--log", action="store_true", help="Show detailed planner/executor logs")
     args = parser.parse_args()
     verbose = args.log
+    simulation_mode = args.simulation
 
     print("🤖 Autonomous VLM-Based Humanoid Robot Planner")
     print("="*70)
@@ -372,7 +374,7 @@ def main():
         # Initialize planner
         planner = AutonomousVLMPlanner(
             model_name=os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
-            simulation_mode=False,
+            simulation_mode=simulation_mode,
             verbose=verbose
         )
 
@@ -387,6 +389,7 @@ def main():
         print("🎮 AUTONOMOUS VLM PLANNER - Ready")
         print("="*70)
         print("📋 Commands:")
+        print(f"  - Mode: {'simulation' if simulation_mode else 'real'}")
         print("  - Speak wake word (e.g. '你好机器人') followed by your request")
         print("  - Type task in natural language directly")
         print("  - 'models' or 'm': List available VLM models")
