@@ -46,6 +46,7 @@ Both planners now default to `real` mode.
 - no extra flag: real hardware mode
 - `--simulation`: simulation mode using local images
 - `--log`: detailed logs
+- `--transport`: choose `voice`, `lark`, `openclaw_lark`, or `none`
 
 ### Humanoid Planner
 
@@ -67,6 +68,17 @@ Simulation mode with full logs:
 python planner/humanoid_planner_vlm.py --simulation --log
 ```
 
+Simulation mode using the native Lark gateway:
+
+```bash
+python server/lark_gateway.py
+
+python planner/humanoid_planner_vlm.py \
+  --simulation \
+  --transport lark \
+  --lark-target 'group:oc_xxx'
+```
+
 ### Arm Planner
 
 Real mode:
@@ -86,6 +98,168 @@ Simulation mode with full logs:
 ```bash
 python planner/arm_planner_vlm.py --simulation --log
 ```
+
+Simulation mode using the native Lark gateway:
+
+```bash
+python server/lark_gateway.py
+
+python planner/arm_planner_vlm.py \
+  --simulation \
+  --transport lark \
+  --lark-target 'group:oc_xxx'
+```
+
+## Interaction Transports
+
+The planner input/output path is now transport-based instead of being tied only
+to human speech.
+
+Supported modes:
+
+- `voice`: compatibility mode using `FunASRManager`
+- `lark`: read and send messages through the project-native Lark gateway server
+- `openclaw_lark`: legacy compatibility mode using the local `openclaw` CLI
+- `none`: keyboard-only interaction
+
+Relevant environment variables:
+
+```bash
+bash scripts/init_env.sh
+
+source env/common.env.sh
+source env/planner.g1.env.sh
+```
+
+The new remote inter-agent action is `send_agent_message`. Local human-facing
+speech remains `speak`.
+
+When using native `lark` transport:
+
+- incoming human messages are normalized to `human: ...`
+- known robot senders can be mapped with `LARK_AGENT_SENDER_MAP`
+- local `speak` responses are mirrored back into the current group chat
+- group-chat messages are only consumed when the bot is `@` mentioned
+- `send_agent_message(recipient=...)` sends a structured message like `@ur5e [agent:g1] [to:ur5e] ...`
+
+Environment layout:
+
+- `env/*.example.sh`: checked-in templates
+- `env/common.env.sh`: shared model keys and common services
+- `env/planner.g1.env.sh`: G1 planner-side interaction config
+- `env/planner.ur5e.env.sh`: UR5e planner-side interaction config
+- `env/planner.env.sh`: backward-compatible default that currently points to G1
+- `env/lark.env.sh`: native Lark gateway and bridge config such as `LARK_ACCOUNT_IDS`, bot `APP_ID`, `APP_SECRET`
+- `apikey.sh`: compatibility entry that sources all three files above
+
+## Native Lark Gateway
+
+Run the project-native gateway with:
+
+```bash
+cd server
+pip install -r requirements.txt
+
+source ../env/common.env.sh
+source ../env/lark.env.sh
+python lark_gateway.py
+```
+
+For WebSocket-based event subscription, start the bridge in another terminal:
+
+```bash
+source env/common.env.sh
+source env/lark.env.sh
+node server/lark_ws_bridge.js
+```
+
+For a single detached background session, use:
+
+```bash
+bash scripts/start_lark_tmux.sh
+```
+
+Stop it with:
+
+```bash
+bash scripts/stop_lark_tmux.sh
+```
+
+For a one-command G1 demo session that starts the Lark stack and the humanoid
+planner together:
+
+```bash
+bash scripts/start_g1_demo_tmux.sh
+```
+
+This defaults to:
+
+```bash
+python planner/humanoid_planner_vlm.py --simulation --log
+```
+
+You can pass custom planner args after the session name:
+
+```bash
+bash scripts/start_g1_demo_tmux.sh ras-g1-real --log
+```
+
+Stop it with:
+
+```bash
+bash scripts/stop_g1_demo_tmux.sh
+```
+
+For the UR5e side, use:
+
+```bash
+bash scripts/start_ur5e_demo_tmux.sh
+```
+
+Stop it with:
+
+```bash
+bash scripts/stop_ur5e_demo_tmux.sh
+```
+
+Multi-bot configuration is environment-based.
+
+Single bot:
+
+```bash
+export LARK_APP_ID='cli_xxx'
+export LARK_APP_SECRET='xxx'
+export LARK_VERIFICATION_TOKEN='xxx'
+export LARK_DEFAULT_ACCOUNT='default'
+```
+
+Multiple bots:
+
+```bash
+export LARK_ACCOUNT_IDS='g1,ur5e'
+
+export LARK_G1_APP_ID='cli_xxx'
+export LARK_G1_APP_SECRET='xxx'
+export LARK_G1_VERIFICATION_TOKEN='xxx'
+
+export LARK_UR5E_APP_ID='cli_yyy'
+export LARK_UR5E_APP_SECRET='yyy'
+export LARK_UR5E_VERIFICATION_TOKEN='yyy'
+```
+
+Preferred mode for this project:
+
+- Feishu/Lark persistent WebSocket connection via `server/lark_ws_bridge.js`
+
+Optional fallback mode:
+
+- webhook callback to `http://<host>:18889/webhook/g1`
+- webhook callback to `http://<host>:18889/webhook/ur5e`
+
+Current limitations:
+
+- encrypted event payloads are not implemented yet; keep Feishu event encryption disabled for now
+- the WebSocket bridge currently depends on `@larksuiteoapi/node-sdk`; by default it reuses the copy bundled inside your OpenClaw installation
 
 ## What Simulation Mode Does
 

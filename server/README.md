@@ -1,3 +1,142 @@
+# Server Deployment Guide
+
+This directory currently contains two independent services:
+
+- `funasr_server.py`: remote ASR service
+- `lark_gateway.py`: native Feishu/Lark gateway for robot-to-robot messaging
+
+## Native Lark Gateway
+
+### Install
+
+```bash
+cd server
+pip install -r requirements.txt
+```
+
+Configuration is now split by responsibility:
+
+- `env/*.example.sh`: checked-in templates
+- `env/common.env.sh`: shared API keys and model defaults
+- `env/planner.g1.env.sh`: G1 planner-side transport settings
+- `env/planner.ur5e.env.sh`: UR5e planner-side transport settings
+- `env/planner.env.sh`: backward-compatible default that currently points to G1
+- `env/lark.env.sh`: gateway and WebSocket bridge settings
+- `apikey.sh`: compatibility wrapper that sources all three
+
+Initialize local env files from templates before first use:
+
+```bash
+bash scripts/init_env.sh
+```
+
+### Configure One Bot
+
+```bash
+export LARK_APP_ID='cli_xxx'
+export LARK_APP_SECRET='xxx'
+export LARK_VERIFICATION_TOKEN='xxx'
+export LARK_DEFAULT_ACCOUNT='default'
+```
+
+### Configure Multiple Bots
+
+```bash
+export LARK_ACCOUNT_IDS='g1,ur5e'
+
+export LARK_G1_APP_ID='cli_xxx'
+export LARK_G1_APP_SECRET='xxx'
+export LARK_G1_VERIFICATION_TOKEN='xxx'
+
+export LARK_UR5E_APP_ID='cli_yyy'
+export LARK_UR5E_APP_SECRET='yyy'
+export LARK_UR5E_VERIFICATION_TOKEN='yyy'
+```
+
+### Start
+
+```bash
+source ../env/common.env.sh
+source ../env/lark.env.sh
+python lark_gateway.py
+```
+
+For persistent-connection event subscription, start the Node bridge too:
+
+```bash
+source ../env/common.env.sh
+source ../env/lark.env.sh
+node lark_ws_bridge.js
+```
+
+Or start both in one detached tmux session from the repo root:
+
+```bash
+bash scripts/start_lark_tmux.sh
+```
+
+Stop the detached session with:
+
+```bash
+bash scripts/stop_lark_tmux.sh
+```
+
+For the common G1 MVP flow, you can start gateway, bridge, and humanoid planner
+in one detached tmux session:
+
+```bash
+bash scripts/start_g1_demo_tmux.sh
+```
+
+Stop it with:
+
+```bash
+bash scripts/stop_g1_demo_tmux.sh
+```
+
+For the UR5e planner, use:
+
+```bash
+bash scripts/start_ur5e_demo_tmux.sh
+```
+
+Default bind:
+
+- host: `0.0.0.0`
+- port: `18889`
+
+### Subscription Mode
+
+Recommended for this project:
+
+- use Feishu/Lark persistent connection mode
+- keep `lark_ws_bridge.js` running
+
+Optional fallback:
+
+- use webhook callback mode and point the callback URL to the Python gateway
+
+### Feishu Callback URLs
+
+For each bot account, configure event subscription to:
+
+- `http://<your-host>:18889/webhook/g1`
+- `http://<your-host>:18889/webhook/ur5e`
+
+Supported flow:
+
+- persistent WebSocket event subscription through `lark_ws_bridge.js`
+- URL verification
+- `im.message.receive_v1`
+- local polling via `/api/messages/read`
+- outbound send via `/api/messages/send`
+
+Current limitation:
+
+- encrypted event payloads are not supported yet; leave Feishu event encryption disabled
+
+---
+
 # FunASR Remote Server Deployment Guide
 
 This guide explains how to deploy the ASR inference server on a workstation (e.g., IP: `192.168.24.103`) and configure the robot (e.g., IP: `192.168.24.294`) to access it over the local network.

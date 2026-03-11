@@ -3,6 +3,8 @@
 Available skills:
 - `speak_and_report`
   - Use for user-facing updates, clarification, and task completion messages.
+- `send_agent_message`
+  - Use for remote robot-to-robot messaging through OpenClaw + Lark/Feishu.
 - `control_home_devices`
   - Use for air conditioner and lighting tasks in Room 01.
 - `navigate_rooms`
@@ -16,6 +18,7 @@ Available skills:
 
 Allowed actions summary:
 - `speak`
+- `send_agent_message`
 - `control_air_conditioner`
 - `control_light`
 - `web_search`

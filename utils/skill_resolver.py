@@ -8,6 +8,7 @@ from utils.action_registry import ACTION_SCHEMAS, get_action_schema, get_action_
 
 COMMON_SKILLS = {
     "speak_and_report": "skills/common/speak_and_report/SKILL.md",
+    "send_agent_message": "skills/common/send_agent_message/SKILL.md",
     "observe_scene": "skills/common/observe_scene/SKILL.md",
     "search_web": "skills/common/search_web/SKILL.md",
 }

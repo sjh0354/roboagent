@@ -66,6 +66,7 @@ class ArmExecutor:
         self.verbose = verbose
         self.volume = volume
         self.voice = voice
+        self.message_transport = None
 
         # Hardware/API clients would be initialized here
         self.robot_controller = None
@@ -162,6 +163,11 @@ class ArmExecutor:
         """Execute communication actions"""
         if action == "speak":
             return self._speak(params.get("message", ""))
+        elif action == "send_agent_message":
+            return self._send_agent_message(
+                params.get("message", ""),
+                recipient=params.get("recipient"),
+            )
         else:
             return ExecutionResult(
                 success=False,
@@ -169,19 +175,23 @@ class ArmExecutor:
                 error=f"Action '{action}' not implemented"
             )
 
+    def set_message_transport(self, transport) -> None:
+        self.message_transport = transport
+
     def _speak(self, message: str) -> ExecutionResult:
         """Speak/communicate (send status to humanoid)"""
         
         # Trigger TTS
         if self.tts_manager:
             self.tts_manager.speak(message, model="cosyvoice-v1", block=False)
+        mirrored = self._mirror_speak_to_transport(message)
             
         if self.simulation_mode:
             print(f"🦾 Arm says: \"{message}\"")
             return ExecutionResult(
                 success=True,
                 feedback=f"Message sent to humanoid: '{message}'",
-                data={"message": message, "recipient": "humanoid"}
+                data={"message": message, "recipient": "humanoid", "mirrored": mirrored}
             )
         else:
             # Real implementation
@@ -189,8 +199,42 @@ class ArmExecutor:
             return ExecutionResult(
                 success=True,
                 feedback=f"Message spoken: '{message}'",
-                data={"message": message}
+                data={"message": message, "mirrored": mirrored}
             )
+
+    def _send_agent_message(self, message: str, recipient: Optional[str] = None) -> ExecutionResult:
+        """Send a remote inter-agent message through the configured transport."""
+        if not message:
+            return ExecutionResult(
+                success=False,
+                feedback="Message is empty",
+                error="empty_message",
+            )
+
+        if self.message_transport and getattr(self.message_transport, "can_send_messages", lambda: False)():
+            result = self.message_transport.send_message(message, recipient=recipient)
+            return ExecutionResult(
+                success=result.success,
+                feedback=result.feedback,
+                data={
+                    "message": message,
+                    "recipient": recipient or "default",
+                    "transport_message_id": result.message_id,
+                    "transport": type(self.message_transport).__name__,
+                    "raw": result.raw,
+                },
+                error=result.error,
+            )
+
+        return self._speak(message)
+
+    def _mirror_speak_to_transport(self, message: str) -> bool:
+        if not self.message_transport:
+            return False
+        if not getattr(self.message_transport, "should_mirror_local_speech", lambda: False)():
+            return False
+        result = self.message_transport.send_message(message)
+        return bool(result.success)
 
     # ==================== TOOL Actions ====================
 

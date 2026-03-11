@@ -25,6 +25,7 @@ from template.humanoid_prompt_template_vlm import (
 from planner.base_vlm_planner import BaseVLMPlanner
 from executor.humanoid_executor_vision import VisionEnabledExecutor
 from utils.funasr_manager import FunASRManager
+from utils.message_transport import MessageTransport, VoiceTransport, create_message_transport
 
 
 class AutonomousVLMPlanner(BaseVLMPlanner):
@@ -45,7 +46,8 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
                  verbose: bool = True,
                  volume: float = 0.1,
                  voice: str = "female",
-                 asr: Optional['FunASRManager'] = None):
+                 asr: Optional['FunASRManager'] = None,
+                 transport: Optional[MessageTransport] = None):
         """
         Initialize VLM-based autonomous planner
 
@@ -59,6 +61,7 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
             asr: Optional FunASRManager for voice command detection during execution
         """
         self.asr = asr
+        self.transport = transport
         self.verbose = verbose
         super().__init__(
             profile_name="humanoid_g1",
@@ -79,6 +82,7 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
             volume=volume,
             voice=voice
         )
+        self.executor.set_message_transport(self.transport)
         self.reset_conversation()
 
         if verbose:
@@ -110,22 +114,33 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
     def set_asr(self, asr: 'FunASRManager'):
         """Set ASR manager for voice command detection during execution"""
         self.asr = asr
+        if self.transport is None:
+            self.transport = VoiceTransport(asr=asr, verbose=self.verbose)
+            self.executor.set_message_transport(self.transport)
+
+    def set_transport(self, transport: Optional[MessageTransport]):
+        self.transport = transport
+        self.executor.set_message_transport(transport)
 
     def provide_human_response(self, response: str) -> Dict:
         return self.provide_input_response(response)
 
     def _check_interrupt(self) -> Optional[Dict]:
-        if self.asr:
+        new_cmd = None
+        if self.transport:
+            new_cmd = self.transport.get_command()
+        elif self.asr:
             new_cmd = self.asr.get_command()
-            if new_cmd:
-                if self.verbose:
-                    print(f"\n🎙️ New voice command detected during execution: {new_cmd}")
-                self.pending_interrupt_command = new_cmd
-                return {
-                    "status": "interrupted",
-                    "new_command": new_cmd,
-                    "step_count": self.step_count
-                }
+
+        if new_cmd:
+            if self.verbose:
+                print(f"\n🎙️ New command detected during execution: {new_cmd}")
+            self.pending_interrupt_command = new_cmd
+            return {
+                "status": "interrupted",
+                "new_command": new_cmd,
+                "step_count": self.step_count
+            }
         return None
 
     def _prepare_current_observation(self) -> str:
@@ -355,6 +370,13 @@ def main():
     parser = argparse.ArgumentParser(description="Autonomous humanoid VLM planner")
     parser.add_argument("--simulation", action="store_true", help="Run in simulation mode using local simulation images")
     parser.add_argument("--log", action="store_true", help="Show detailed planner/executor logs")
+    parser.add_argument(
+        "--transport",
+        default=os.getenv("INTERACTION_TRANSPORT", "voice"),
+        help="Interaction transport: voice | lark | openclaw_lark | none",
+    )
+    parser.add_argument("--lark-target", default=os.getenv("LARK_TARGET") or os.getenv("OPENCLAW_LARK_TARGET"), help="Lark/Feishu target chat id")
+    parser.add_argument("--lark-account", default=os.getenv("LARK_ACCOUNT_ID") or os.getenv("OPENCLAW_LARK_ACCOUNT"), help="Lark bot account id")
     args = parser.parse_args()
     verbose = args.log
     simulation_mode = args.simulation
@@ -372,25 +394,29 @@ def main():
 
     try:
         # Initialize planner
+        transport = create_message_transport(
+            args.transport,
+            verbose=verbose,
+            target=args.lark_target,
+            account_id=args.lark_account,
+        )
+        if transport:
+            transport.start()
+
         planner = AutonomousVLMPlanner(
             model_name=os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
             simulation_mode=simulation_mode,
-            verbose=verbose
+            verbose=verbose,
+            transport=transport,
         )
-
-        # Initialize Always-On ASR
-        asr = FunASRManager(verbose=verbose)
-        asr.start()
-
-        # Connect ASR to planner for interrupt detection
-        planner.set_asr(asr)
 
         print("\n" + "="*70)
         print("🎮 AUTONOMOUS VLM PLANNER - Ready")
         print("="*70)
         print("📋 Commands:")
         print(f"  - Mode: {'simulation' if simulation_mode else 'real'}")
-        print("  - Speak wake word (e.g. '你好机器人') followed by your request")
+        print(f"  - Transport: {args.transport}")
+        print("  - Speak wake word (e.g. '你好机器人') followed by your request when using voice transport")
         print("  - Type task in natural language directly")
         print("  - 'models' or 'm': List available VLM models")
         print("  - 'switch <model>': Switch VLM model")
@@ -403,9 +429,9 @@ def main():
             user_input = None
             
             # 1. Check for voice command (non-blocking)
-            voice_cmd = asr.get_command()
+            voice_cmd = transport.get_command() if transport else None
             if voice_cmd:
-                print(f"\n🎙️  Voice command detected: {voice_cmd}")
+                print(f"\n🎙️  Transport command detected: {voice_cmd}")
                 user_input = voice_cmd
             
             # 2. Check for keyboard input (non-blocking)
@@ -422,7 +448,8 @@ def main():
             # Handle commands
             if user_input.lower() in ['quit', 'q']:
                 print("👋 Goodbye!")
-                asr.stop()
+                if transport:
+                    transport.stop()
                 break
 
             elif user_input.lower() in ['models', 'm']:
@@ -477,9 +504,9 @@ def main():
                 response = None
                 while not response:
                     # Check voice (use get_speech for responses - no wake word needed)
-                    v_res = asr.get_speech()
+                    v_res = transport.get_response() if transport else None
                     if v_res:
-                        print(f"{v_res} (voice)")
+                        print(f"{v_res} (transport)")
                         response = v_res
 
                     # Check keyboard
@@ -499,10 +526,12 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted. Goodbye!")
-        if 'asr' in locals(): asr.stop()
+        if 'transport' in locals() and transport:
+            transport.stop()
     except Exception as e:
         print(f"❌ Error: {str(e)}")
-        if 'asr' in locals(): asr.stop()
+        if 'transport' in locals() and transport:
+            transport.stop()
 
 
 if __name__ == "__main__":

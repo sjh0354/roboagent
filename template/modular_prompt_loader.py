@@ -54,6 +54,7 @@ def _build_sections(
 def _list_skill_paths(profile_name: str) -> List[str]:
     common_paths = [
         "skills/common/speak_and_report/SKILL.md",
+        "skills/common/send_agent_message/SKILL.md",
         "skills/common/observe_scene/SKILL.md",
     ]
 

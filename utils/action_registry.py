@@ -13,6 +13,12 @@ ACTION_SCHEMAS: Dict[str, Dict[str, Dict[str, object]]] = {
             "keywords": ["say", "speak", "tell", "report", "notify", "ask"],
             "follow_up_skills": [],
         },
+        "send_agent_message": {
+            "action_type": "talk",
+            "skill": "send_agent_message",
+            "keywords": ["message robot", "contact store robot", "send message", "notify robot", "group chat", "lark", "feishu"],
+            "follow_up_skills": [],
+        },
         "control_air_conditioner": {
             "action_type": "tool",
             "skill": "control_home_devices",
@@ -67,6 +73,12 @@ ACTION_SCHEMAS: Dict[str, Dict[str, Dict[str, object]]] = {
             "action_type": "talk",
             "skill": "speak_and_report",
             "keywords": ["say", "report", "notify", "tell"],
+            "follow_up_skills": [],
+        },
+        "send_agent_message": {
+            "action_type": "talk",
+            "skill": "send_agent_message",
+            "keywords": ["message humanoid", "notify humanoid", "send message", "group chat", "lark", "feishu"],
             "follow_up_skills": [],
         },
         "pick_and_place": {

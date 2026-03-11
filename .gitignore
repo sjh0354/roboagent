@@ -7,11 +7,15 @@
 
 # API Keys and secrets
 apikey.bash
-apikey.sh
 api_key.*
 secrets.*
 .env.api
 captured_images/
+env/*.env.sh
+env/*.local.sh
+!env/*.example.sh
+!env/planner.env.sh
+!apikey.sh
 
 # Python
 __pycache__/
