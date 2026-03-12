@@ -461,6 +461,7 @@ class NativeLarkGatewayTransport(MessageTransport):
         self.agent_sender_map = _load_agent_sender_map()
         self.bot_aliases = _load_bot_aliases(account_id)
         self.agent_mention_map = _load_agent_mentions()
+        self.agent_display_map = _load_agent_display_map()
 
         self._incoming: "queue.Queue[TransportMessage]" = queue.Queue()
         self._running = False
@@ -610,9 +611,9 @@ class NativeLarkGatewayTransport(MessageTransport):
         sender_name = (item.get("sender_name") or "").strip()
         sender_type = (item.get("sender_type") or "").strip().lower()
 
-        speaker = tagged_sender or self.agent_sender_map.get(sender_id)
+        speaker = self._resolve_agent_name(tagged_sender) or self.agent_sender_map.get(sender_id)
         if not speaker and sender_name:
-            lowered_name = sender_name.lower()
+            lowered_name = self._resolve_agent_name(sender_name) or sender_name.lower()
             if lowered_name in {"ur5e", "g1", "humanoid", "humanoid_robot"}:
                 speaker = lowered_name
         if not speaker and sender_type == "app":
@@ -637,13 +638,15 @@ class NativeLarkGatewayTransport(MessageTransport):
         if not self.bot_aliases:
             return True
 
-        mentions = _extract_mentions(raw_text)
-        if any(mention in self.bot_aliases for mention in mentions):
+        alias_keys = {_canonicalize_alias(alias) for alias in self.bot_aliases if alias}
+        mentions = _extract_mentions(raw_text) + _extract_structured_mentions(item)
+        if any(_canonicalize_alias(mention) in alias_keys for mention in mentions if mention):
             return True
 
         without_mentions = _strip_leading_mentions(raw_text)
         _, tagged_recipient, _ = _extract_agent_envelope(without_mentions)
-        if tagged_recipient and tagged_recipient.lower() in self.bot_aliases:
+        resolved_recipient = self._resolve_agent_name(tagged_recipient)
+        if resolved_recipient and _canonicalize_alias(resolved_recipient) in alias_keys:
             return True
         return False
 
@@ -654,18 +657,38 @@ class NativeLarkGatewayTransport(MessageTransport):
         if not recipient:
             return stripped
 
-        mention = self.agent_mention_map.get(recipient.strip(), recipient.strip())
+        recipient_key = recipient.strip()
+        mention = self.agent_mention_map.get(recipient_key, recipient_key)
         mention = mention.lstrip("@").strip()
         if not mention:
             return stripped
         tagged_text = _apply_agent_envelope(
             stripped,
-            sender=self.account_id,
-            recipient=recipient.strip(),
+            sender=self.agent_display_map.get(self.account_id, self.account_id),
+            recipient=self.agent_display_map.get(recipient_key, recipient_key),
         )
         if tagged_text.startswith(f"@{mention}"):
             return tagged_text
         return f"@{mention} {tagged_text}"
+
+    def _resolve_agent_name(self, value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        canonical = _canonicalize_alias(value)
+        if not canonical:
+            return None
+
+        for agent_id, display_name in self.agent_display_map.items():
+            if canonical in {
+                _canonicalize_alias(agent_id),
+                _canonicalize_alias(display_name),
+            }:
+                return agent_id
+
+        lowered = str(value).strip().lower()
+        if lowered in {"ur5e", "g1", "humanoid", "humanoid_robot"}:
+            return lowered
+        return lowered
 
 
 def _normalize_chat_target(target: str) -> str:
@@ -714,6 +737,36 @@ def _extract_mentions(text: str) -> List[str]:
     return [match.strip().lstrip("@").lower() for match in re.findall(r"@([^\s@]+)", text or "")]
 
 
+def _extract_structured_mentions(item: Dict[str, Any]) -> List[str]:
+    raw = item.get("raw_event")
+    if not isinstance(raw, dict):
+        return []
+
+    message = raw.get("message")
+    if not isinstance(message, dict):
+        return []
+
+    mentions = message.get("mentions")
+    if not isinstance(mentions, list):
+        return []
+
+    extracted: List[str] = []
+    for mention in mentions:
+        if not isinstance(mention, dict):
+            continue
+        mention_id = mention.get("id")
+        if not isinstance(mention_id, dict):
+            mention_id = {}
+        for candidate in (mention.get("name"), mention.get("key"), mention_id.get("open_id")):
+            if isinstance(candidate, str) and candidate.strip():
+                extracted.append(candidate.strip().lstrip("@").lower())
+    return extracted
+
+
+def _canonicalize_alias(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
 def _extract_agent_envelope(text: str) -> tuple[Optional[str], Optional[str], str]:
     stripped = str(text or "").strip()
     sender: Optional[str] = None
@@ -752,7 +805,7 @@ def _apply_agent_envelope(message: str, sender: str, recipient: Optional[str] = 
 def _load_bot_aliases(account_id: str) -> set[str]:
     aliases = {account_id.strip().lower()} if account_id else set()
     defaults = {
-        "g1": {"g1", "humanoid"},
+        "g1": {"g1", "humanoid", "unitree-g1", "unitree_g1", "unitreeg1"},
         "ur5e": {"ur5e", "arm"},
     }
     aliases.update(defaults.get(account_id.strip().lower(), set()))
@@ -808,6 +861,34 @@ def _load_agent_mentions() -> Dict[str, str]:
         mention = mention.strip().lstrip("@")
         if agent_name and mention:
             mapping[agent_name] = mention
+    return mapping
+
+
+def _load_agent_display_map() -> Dict[str, str]:
+    raw = os.getenv("LARK_AGENT_DISPLAY_MAP", "").strip()
+    if not raw:
+        return {}
+
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return {
+                str(agent_name).strip(): str(display_name).strip()
+                for agent_name, display_name in parsed.items()
+                if str(agent_name).strip() and str(display_name).strip()
+            }
+    except json.JSONDecodeError:
+        pass
+
+    mapping: Dict[str, str] = {}
+    for item in raw.split(","):
+        if ":" not in item:
+            continue
+        agent_name, display_name = item.split(":", 1)
+        agent_name = agent_name.strip()
+        display_name = display_name.strip()
+        if agent_name and display_name:
+            mapping[agent_name] = display_name
     return mapping
 
 

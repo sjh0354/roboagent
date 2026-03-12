@@ -8,5 +8,6 @@ export LARK_GATEWAY_URL="http://127.0.0.1:18889"
 
 # Incoming sender normalization and group-chat mention behavior.
 export LARK_AGENT_SENDER_MAP='{"ou_ur5e_sender_id":"ur5e"}'
-export LARK_BOT_ALIASES='{"g1":["g1","humanoid"]}'
-export LARK_AGENT_MENTION_MAP='{"ur5e":"ur5e","g1":"g1"}'
+export LARK_BOT_ALIASES='{"g1":["g1","humanoid","Unitree-G1"],"ur5e":["ur5e","arm","UR5E-Robot-arm"]}'
+export LARK_AGENT_MENTION_MAP='{"ur5e":"UR5E-Robot-arm","g1":"Unitree-G1"}'
+export LARK_AGENT_DISPLAY_MAP='{"g1":"Unitree-G1","ur5e":"UR5E-Robot-arm"}'
