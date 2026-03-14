@@ -13,6 +13,8 @@ Available skills:
   - Use for generic `pick` and `place` actions.
 - `search_web`
   - Use when the task requires external information lookup.
+- `query_weather`
+  - Use weather backend query in API-update reflection experiments.
 - `observe_scene`
   - Use when a fresh visual observation is needed before the next action.
 

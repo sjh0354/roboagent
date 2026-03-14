@@ -56,6 +56,7 @@ def _list_skill_paths(profile_name: str) -> List[str]:
         "skills/common/speak_and_report/SKILL.md",
         "skills/common/send_agent_message/SKILL.md",
         "skills/common/observe_scene/SKILL.md",
+        "skills/common/query_weather/SKILL.md",
     ]
 
     profile_paths = {

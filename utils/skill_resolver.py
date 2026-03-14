@@ -11,6 +11,7 @@ COMMON_SKILLS = {
     "send_agent_message": "skills/common/send_agent_message/SKILL.md",
     "observe_scene": "skills/common/observe_scene/SKILL.md",
     "search_web": "skills/common/search_web/SKILL.md",
+    "query_weather": "skills/common/query_weather/SKILL.md",
 }
 
 PROFILE_SKILLS = {

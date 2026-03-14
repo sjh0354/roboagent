@@ -10,6 +10,9 @@ import subprocess
 from datetime import datetime
 from typing import Dict, Any, Optional
 import json
+import os
+
+from utils.mock_weather_api import MockWeatherAPI
 
 # Dummy placeholder for SmartHomeAPI
 class SmartHomeAPI:
@@ -93,6 +96,10 @@ class HumanoidExecutor:
         self.robot_controller = None
         self.vision_system = None
         self.smart_home_controller = None
+
+        # Mock weather backend for simulation experiments
+        weather_api_version = os.getenv("WEATHER_API_VERSION", "v2")
+        self.weather_api = MockWeatherAPI(api_version=weather_api_version)
 
         # Execution statistics
         self.execution_count = 0
@@ -312,6 +319,9 @@ class HumanoidExecutor:
                 params.get("query", "")
             )
 
+        elif action == "query_weather_api":
+            return self._query_weather_api(params)
+
         else:
             return ExecutionResult(
                 success=False,
@@ -402,6 +412,32 @@ class HumanoidExecutor:
             # - Use requests library or browser automation
             # - Parse search results
             raise NotImplementedError("Real web search not yet implemented")
+
+    def _query_weather_api(self, payload: Dict[str, Any]) -> ExecutionResult:
+        """Call mock weather backend with payload and return structured result."""
+        response = self.weather_api.query_weather(payload)
+        if response.success:
+            return ExecutionResult(
+                success=True,
+                feedback="Weather API query succeeded",
+                data={
+                    "weather": response.data,
+                    "api_version": self.weather_api.api_version,
+                    "request_payload": payload,
+                },
+            )
+
+        return ExecutionResult(
+            success=False,
+            feedback="Weather API query failed",
+            data={
+                "api_version": self.weather_api.api_version,
+                "request_payload": payload,
+                "error_code": response.error_code,
+                "error_message": response.error_message,
+            },
+            error=response.error_message,
+        )
 
     # ==================== ACT Actions ====================
 
