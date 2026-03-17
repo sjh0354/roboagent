@@ -48,3 +48,6 @@ wheels/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local experiments
+experiments/
