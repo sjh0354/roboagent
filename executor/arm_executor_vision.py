@@ -75,7 +75,8 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
                 item_name = parameters.get("item_name", "item")
                 source = parameters.get("source", "shelf")
                 target = parameters.get("target", "counter")
-                instruction = f"Move the {item_name} into the {target}."
+                # instruction = f"Move the {item_name} into the {target}."
+                instruction = f"pick up the {item_name} and place into {target}."
             elif action_name == "pick_from_shelf":
                  item_name = parameters.get("item_name", "item")
                  instruction = f"Pick the {item_name} from the shelf."
