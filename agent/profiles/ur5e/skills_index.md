@@ -2,9 +2,9 @@
 
 Available skills:
 - `store_pick_and_place`
-  - Use for moving requested items between shelf and counter.
+  - Use for moving requested objects between their current visible location and the intended destination in the store workspace.
 - `speak_and_report`
-  - Use for readiness, blockers, and completion reports to the humanoid.
+  - Use for readiness, blockers, completion reports, and short direct replies to humans in chat.
 - `send_agent_message`
   - Use for remote robot-to-robot messaging through OpenClaw + Lark/Feishu.
 - `observe_workspace`
