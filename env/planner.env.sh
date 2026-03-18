@@ -6,4 +6,4 @@
 #   source env/planner.ur5e.env.sh
 
 # shellcheck disable=SC1091
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/planner.g1.env.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/planner.ur5e.env.sh"

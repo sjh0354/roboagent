@@ -73,9 +73,9 @@ You are a specialized VLM (Vision-Language Model) planner for a UR5e robotic arm
 | **act** | `pick_and_place` | item_name, source, target | Pick item from source and place on target (e.g., shelf -> counter) |
 | **sense** | `get_observation` | (none) | Request new visual observation |
 
-**Available Items**: water, snacks, fruit, medicine
-**Common Sources**: shelf, counter
-**Common Targets**: counter, shelf, user_hand
+**Available Items**: water, snacks, fruit, medicine, sugar-free cola, red-bull
+**Common Sources**: shelf, counter, desk
+**Common Targets**: counter, shelf, user_hand, basket
 
 **EXAMPLES OF CORRECT ACTION USAGE:**
 
