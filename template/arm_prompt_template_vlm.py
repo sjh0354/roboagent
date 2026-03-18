@@ -6,6 +6,11 @@ VLM planner that receives direct visual observations for autonomous planning
 """
 
 import json
+import os
+import sys
+
+if __package__ is None or __package__ == "":
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from template.modular_prompt_loader import build_modular_system_prompt
 from utils.action_registry import get_allowed_actions

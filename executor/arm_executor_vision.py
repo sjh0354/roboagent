@@ -8,6 +8,7 @@ Extends ArmExecutor with vision-based observation capabilities
 import os
 import time
 import subprocess
+import glob
 from typing import Dict, Any
 from executor.arm_executor import ArmExecutor, ExecutionResult
 from executor.vision_enabled_mixin import VisionEnabledMixin
@@ -104,6 +105,8 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
         container_name = "exp_ef_ur5e-arm-teleopration"
         script_in_docker = "/home/ef/projects/ur5e-arm-teleoperation/run_pi0_inference.sh"
         kill_script_in_docker = "/home/ef/projects/ur5e-arm-teleoperation/kill_project.sh"
+        keep_session_on_fail = os.getenv("PI0_KEEP_SESSION_ON_FAIL", "0") == "1"
+        should_cleanup = True
 
         try:
             if self.verbose:
@@ -118,6 +121,20 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
             if self.verbose:
                 print(f"   Starting/Checking Docker container in {docker_dir}...")
             subprocess.run(["make", "_instantiate_container"], cwd=docker_dir, env=env, check=True)
+
+            # Ensure no stale tmux session from previous run remains inside container.
+            # A leftover `tmp` session causes `duplicate session: tmp` and launch failure.
+            stale_cleanup_cmd = [
+                "docker", "exec",
+                "-u", "1002",
+                "-w", "/home/ef/projects/ur5e-arm-teleoperation",
+                container_name,
+                "bash", "-lc",
+                "tmux has-session -t tmp 2>/dev/null && ./kill_project.sh || true",
+            ]
+            if self.verbose:
+                print("   Cleaning stale Docker tmux session (if exists)...")
+            subprocess.run(stale_cleanup_cmd, check=False)
             
             # 2. Run inference script INSIDE Docker
             # Command: docker exec -u 1002 -e INSTRUCTION="..." -w ... <container> ./run_pi0_inference.sh
@@ -129,6 +146,12 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
                 container_name,
                 "./run_pi0_inference.sh"
             ]
+
+            # Optional overrides for backend/network troubleshooting.
+            for env_key in ["POLICY_HOST", "POLICY_PORT", "ROBOT_IP", "USE_REAL_ROBOT"]:
+                env_val = os.environ.get(env_key)
+                if env_val:
+                    cmd[2:2] = ["-e", f"{env_key}={env_val}"]
             
             if self.verbose:
                 print(f"   Running inside Docker: {' '.join(cmd)}")
@@ -136,15 +159,46 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
             subprocess.run(cmd, check=True)
             
             # 3. Wait for action to complete (since script is non-blocking tmux)
-            wait_time = 60
+            wait_time = 90
             if self.verbose:
                 print(f"   ⏳ Waiting {wait_time}s for robot action to complete...")
             time.sleep(wait_time)
+
+            log_path, steps = self._get_latest_pi0_action_steps(
+                "/home/ef/projects/ur5e-arm-teleoperation/logs"
+            )
+            if self.verbose and log_path:
+                print(f"   PI0 action log: {log_path}")
+                print(f"   PI0 steps observed: {steps}")
+
+            if steps <= 0:
+                if keep_session_on_fail:
+                    should_cleanup = False
+                diagnostics = self._capture_container_pi0_pane(container_name)
+                return ExecutionResult(
+                    success=False,
+                    feedback="PI0 launched but no robot control steps were produced.",
+                    error=(
+                        "Detected 0 PI0 steps. Likely no camera/joint-state data or PI0 node not ready. "
+                        f"log={log_path or 'N/A'}"
+                    ),
+                    data={
+                        "instruction": instruction,
+                        "pi0_action_log": log_path,
+                        "pi0_steps": steps,
+                        "pi0_pane_tail": diagnostics,
+                        "cleanup_skipped": keep_session_on_fail,
+                    },
+                )
             
             return ExecutionResult(
                 success=True,
                 feedback=f"Executed PI0 inference with instruction: '{instruction}'",
-                data={"instruction": instruction}
+                data={
+                    "instruction": instruction,
+                    "pi0_action_log": log_path,
+                    "pi0_steps": steps,
+                },
             )
 
         except subprocess.CalledProcessError as e:
@@ -152,27 +206,72 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
         except Exception as e:
             return ExecutionResult(False, f"Failed to execute script", error=str(e))
         finally:
-            # 4. Cleanup INSIDE Docker
-            if self.verbose:
-                print(f"   Cleaning up processes inside Docker...")
-            
-            cleanup_cmd = [
-                "docker", "exec",
-                "-u", "1002",
-                "-w", "/home/ef/projects/ur5e-arm-teleoperation",
-                container_name,
-                "./kill_project.sh"
-            ]
-            
-            try:
-                subprocess.run(cleanup_cmd, check=False)
-            except Exception as e:
-                print(f"Error during cleanup: {e}")
+            if not should_cleanup:
+                if self.verbose:
+                    print("   Debug mode: keeping Docker tmux session alive for inspection (PI0_KEEP_SESSION_ON_FAIL=1).")
+            else:
+                # 4. Cleanup INSIDE Docker
+                if self.verbose:
+                    print(f"   Cleaning up processes inside Docker...")
+
+                cleanup_cmd = [
+                    "docker", "exec",
+                    "-u", "1002",
+                    "-w", "/home/ef/projects/ur5e-arm-teleoperation",
+                    container_name,
+                    "./kill_project.sh"
+                ]
+
+                try:
+                    subprocess.run(cleanup_cmd, check=False)
+                except Exception as e:
+                    print(f"Error during cleanup: {e}")
             
             # 5. Stop Docker container (optional, maybe keep it running for speed?)
             # Keeping it running is faster for subsequent commands. 
             # If we want to strictly stop it:
             # subprocess.run(["make", "kill"], cwd=docker_dir, check=False)
+
+    def _get_latest_pi0_action_steps(self, log_dir: str):
+        pattern = os.path.join(log_dir, "pi0_actions_*.log")
+        candidates = glob.glob(pattern)
+        if not candidates:
+            return None, 0
+
+        latest = max(candidates, key=os.path.getmtime)
+        steps = 0
+        try:
+            with open(latest, "r", encoding="utf-8", errors="ignore") as file:
+                for line in file:
+                    if line.startswith("#") or not line.strip():
+                        continue
+                    steps += 1
+        except Exception:
+            return latest, 0
+
+        return latest, steps
+
+    def _capture_container_pi0_pane(self, container_name: str) -> str:
+        try:
+            cmd = [
+                "docker",
+                "exec",
+                "-u",
+                "1002",
+                container_name,
+                "tmux",
+                "capture-pane",
+                "-pt",
+                "tmp:0.2",
+                "-S",
+                "-80",
+            ]
+            result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if result.returncode == 0:
+                return (result.stdout or "").strip()
+            return (result.stderr or "").strip()
+        except Exception as error:
+            return f"failed to capture pane: {error}"
 
     def _create_camera_manager(self):
         if RealSenseCameraManager is None:
