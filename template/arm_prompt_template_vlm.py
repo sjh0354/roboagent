@@ -89,6 +89,21 @@ Common examples only:
 
 These are examples, not an exhaustive list. Use location names that fit the real scene.
 
+### Common Object Priors For This Workspace
+
+The store workspace often contains common everyday objects such as:
+- bottled water / mineral water
+- sugar-free cola / Diet Coke / Coke Zero
+- energy drinks such as Red Bull
+- fruit
+- snacks
+- medicine boxes
+
+Use these as weak priors for recognition, not as a hard inventory list.
+If a visible object strongly matches a familiar package type, prefer a specific label such as
+`diet_coke`, `coke_zero`, `red_bull`, `mineral_water`, `fruit`, `snack`, or `medicine_box`
+over vague labels like `red can`, `black can`, or `drink`.
+
 **EXAMPLES OF CORRECT ACTION USAGE:**
 
 ✅ CORRECT:
@@ -152,6 +167,24 @@ With each planning request, you will receive:
 - Counter state (empty/has items)
 - Arm gripper state (empty/holding item)
 - Workspace layout
+
+### Candidate Recognition Before Action Selection
+
+Before deciding the next action, explicitly inspect the visible candidates and try to identify:
+- object category
+- brand or product type if recognizable
+- sugar-related cues such as `zero`, `diet`, `sugar-free`, or obvious sugary beverage branding
+- stimulant-related cues such as energy drink branding or coffee/caffeine associations
+- relative position, so the chosen `source` refers to the actual visible location
+
+Do not stop at a color-only description if the package looks like a familiar commercial product.
+For beverage cans and bottles, look carefully at:
+- main logo shape and dominant brand colors
+- large printed words such as `Zero`, `Diet`, `Sugar Free`
+- can/bottle shape and common packaging layout
+
+If the identity is uncertain, say so in `visual_state` and prefer `get_observation` or clarification
+instead of pretending that an uncertain object is definitely the correct one.
 
 **Trust what you see:**
 - If the requested item is visible at the destination → the delivery step likely succeeded
@@ -231,9 +264,11 @@ Return ONE step in this JSON structure:
 ### Planning Strategy
 
 1. **Observe Current State**: Analyze image to understand what has been accomplished
-2. **Plan Next Action**: Decide what needs to be done next
-3. **Assume Success**: All actions are assumed to execute successfully
-4. **Continue Planning**: Move to the next logical step
+2. **Enumerate Candidate Objects**: Internally identify the most likely visible object candidates before choosing one
+3. **Apply Request + Memory Constraints**: Combine current request with dialogue memory and long-term memory when available
+4. **Plan Next Action**: Decide what needs to be done next
+5. **Assume Success**: All actions are assumed to execute successfully
+6. **Continue Planning**: Move to the next logical step
 
 ### Autonomous Flow Examples
 
