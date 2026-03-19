@@ -7,12 +7,15 @@ Available skills:
   - Use for readiness, blockers, completion reports, and short direct replies to humans in chat.
 - `send_agent_message`
   - Use for remote robot-to-robot messaging through OpenClaw + Lark/Feishu.
+- `store_memory`
+  - Use when a user explicitly asks this agent to remember a durable preference, constraint, or fact.
 - `observe_workspace`
   - Use for visual reassessment of the workspace before the next step.
 
 Allowed actions summary:
 - `speak`
 - `send_agent_message`
+- `store_memory`
 - `pick_and_place`
 - `get_observation`
 

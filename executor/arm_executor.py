@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 import json
+from utils.memory_manager import MemoryManager
 
 try:
     from utils.tts_manager import TTSManager
@@ -67,6 +68,7 @@ class ArmExecutor:
         self.volume = volume
         self.voice = voice
         self.message_transport = None
+        self.memory_manager = MemoryManager(profile_name="ur5e", verbose=verbose)
 
         # Hardware/API clients would be initialized here
         self.robot_controller = None
@@ -245,6 +247,12 @@ class ArmExecutor:
                 params.get("URL", ""),
                 params.get("query", "")
             )
+        elif action == "store_memory":
+            return self._store_memory(
+                params.get("content", ""),
+                scope=params.get("scope", "global"),
+                category=params.get("category", "note"),
+            )
         else:
             return ExecutionResult(
                 success=False,
@@ -266,6 +274,29 @@ class ArmExecutor:
         else:
             # Base implementation doesn't support real search
             raise NotImplementedError("Real web search not yet implemented")
+
+    def _store_memory(self, content: str, scope: str = "global", category: str = "note") -> ExecutionResult:
+        """Persist a durable memory entry."""
+        if not content:
+            return ExecutionResult(
+                success=False,
+                feedback="Memory content is empty",
+                error="empty_memory_content",
+            )
+
+        path = self.memory_manager.store_memory(content=content, scope=scope, category=category)
+        if not path:
+            return ExecutionResult(
+                success=False,
+                feedback="Memory write failed",
+                error="memory_write_failed",
+            )
+
+        return ExecutionResult(
+            success=True,
+            feedback=f"Stored {category} memory in {scope} scope",
+            data={"content": content, "scope": scope, "category": category, "path": path},
+        )
 
     # ==================== ACT Actions ====================
 

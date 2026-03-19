@@ -76,6 +76,28 @@ class MemoryManager:
             **({"long_term": persisted_memory} if persisted_memory else {}),
         }
 
+    def store_memory(
+        self,
+        content: str,
+        scope: str = "global",
+        category: str = "note",
+    ) -> Optional[str]:
+        entry = self._normalize_memory_entry(content=content, category=category)
+        if not entry:
+            return None
+
+        normalized_scope = (scope or "global").strip().lower()
+        if normalized_scope in {"hardware", "profile", self.profile_name.lower()}:
+            path = os.path.join(MEMORY_ROOT, "hardware", f"{self.profile_name}_memory.md")
+        else:
+            path = GLOBAL_MEMORY_PATH
+
+        if not os.path.exists(path):
+            return None
+
+        self._append_memory_entry(path, entry)
+        return path
+
     def _render_candidate(
         self,
         level: str,
@@ -173,22 +195,7 @@ class MemoryManager:
         if not os.path.exists(GLOBAL_MEMORY_PATH):
             return None
 
-        with open(GLOBAL_MEMORY_PATH, "r", encoding="utf-8") as file:
-            content = file.read()
-
-        if lesson in content:
-            return None
-
-        marker = "Current entries:\n"
-        bullet = f"- {lesson}\n"
-        if marker in content:
-            updated = content.replace(marker, f"{marker}{bullet}", 1)
-        else:
-            updated = content.rstrip() + f"\n\nCurrent entries:\n{bullet}"
-
-        with open(GLOBAL_MEMORY_PATH, "w", encoding="utf-8") as file:
-            file.write(updated)
-
+        self._append_memory_entry(GLOBAL_MEMORY_PATH, lesson)
         return GLOBAL_MEMORY_PATH
 
     def _extract_explicit_memory_lesson(self, request: str) -> Optional[str]:
@@ -234,3 +241,34 @@ class MemoryManager:
         compact = re.sub(r"\s+", " ", request).strip()
         compact = compact.rstrip("。.!！?？")
         return compact
+
+    def _normalize_memory_entry(self, content: str, category: str) -> Optional[str]:
+        cleaned = self._compact_request(content or "")
+        if not cleaned:
+            return None
+
+        normalized_category = (category or "note").strip().lower()
+        if normalized_category == "preference":
+            return f"User preference: {cleaned}"
+        if normalized_category in {"constraint", "restriction"}:
+            return f"User constraint: {cleaned}"
+        if normalized_category == "safety":
+            return f"User safety note: {cleaned}"
+        return cleaned
+
+    def _append_memory_entry(self, path: str, entry: str) -> None:
+        with open(path, "r", encoding="utf-8") as file:
+            content = file.read()
+
+        if entry in content:
+            return
+
+        marker = "Current entries:\n"
+        bullet = f"- {entry}\n"
+        if marker in content:
+            updated = content.replace(marker, f"{marker}{bullet}", 1)
+        else:
+            updated = content.rstrip() + f"\n\nCurrent entries:\n{bullet}"
+
+        with open(path, "w", encoding="utf-8") as file:
+            file.write(updated)

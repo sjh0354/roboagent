@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional
 import json
 import os
 
+from utils.memory_manager import MemoryManager
 from utils.mock_weather_api import MockWeatherAPI
 
 # Dummy placeholder for SmartHomeAPI
@@ -91,6 +92,7 @@ class HumanoidExecutor:
         self.volume = volume
         self.voice = voice
         self.message_transport = None
+        self.memory_manager = MemoryManager(profile_name="humanoid_g1", verbose=verbose)
 
         # Hardware/API clients will be initialized here
         self.robot_controller = None
@@ -322,6 +324,13 @@ class HumanoidExecutor:
         elif action == "query_weather_api":
             return self._query_weather_api(params)
 
+        elif action == "store_memory":
+            return self._store_memory(
+                params.get("content", ""),
+                scope=params.get("scope", "global"),
+                category=params.get("category", "note"),
+            )
+
         else:
             return ExecutionResult(
                 success=False,
@@ -437,6 +446,29 @@ class HumanoidExecutor:
                 "error_message": response.error_message,
             },
             error=response.error_message,
+        )
+
+    def _store_memory(self, content: str, scope: str = "global", category: str = "note") -> ExecutionResult:
+        """Persist a durable memory entry."""
+        if not content:
+            return ExecutionResult(
+                success=False,
+                feedback="Memory content is empty",
+                error="empty_memory_content",
+            )
+
+        path = self.memory_manager.store_memory(content=content, scope=scope, category=category)
+        if not path:
+            return ExecutionResult(
+                success=False,
+                feedback="Memory write failed",
+                error="memory_write_failed",
+            )
+
+        return ExecutionResult(
+            success=True,
+            feedback=f"Stored {category} memory in {scope} scope",
+            data={"content": content, "scope": scope, "category": category, "path": path},
         )
 
     # ==================== ACT Actions ====================

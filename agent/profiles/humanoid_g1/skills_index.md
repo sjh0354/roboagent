@@ -5,6 +5,8 @@ Available skills:
   - Use for user-facing updates, clarification, and task completion messages.
 - `send_agent_message`
   - Use for remote robot-to-robot messaging through OpenClaw + Lark/Feishu.
+- `store_memory`
+  - Use when a user explicitly asks this agent to remember a durable preference, constraint, or fact.
 - `control_home_devices`
   - Use for air conditioner and lighting tasks in Room 01.
 - `navigate_rooms`
@@ -21,6 +23,7 @@ Available skills:
 Allowed actions summary:
 - `speak`
 - `send_agent_message`
+- `store_memory`
 - `control_air_conditioner`
 - `control_light`
 - `web_search`

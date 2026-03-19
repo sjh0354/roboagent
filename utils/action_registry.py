@@ -43,6 +43,12 @@ ACTION_SCHEMAS: Dict[str, Dict[str, Dict[str, object]]] = {
             "keywords": ["weather", "temperature", "forecast", "cold", "hot"],
             "follow_up_skills": ["speak_and_report"],
         },
+        "store_memory": {
+            "action_type": "tool",
+            "skill": "store_memory",
+            "keywords": ["remember", "memory", "record", "save this", "store this", "preference", "长期记忆", "记住", "记录到memory"],
+            "follow_up_skills": ["speak_and_report"],
+        },
         "navigate_to": {
             "action_type": "act",
             "skill": "navigate_rooms",
@@ -92,6 +98,12 @@ ACTION_SCHEMAS: Dict[str, Dict[str, Dict[str, object]]] = {
             "skill": "store_pick_and_place",
             "keywords": ["pick", "place", "move", "counter", "shelf", "water", "snack", "fruit", "medicine"],
             "follow_up_skills": ["speak_and_report", "observe_workspace"],
+        },
+        "store_memory": {
+            "action_type": "tool",
+            "skill": "store_memory",
+            "keywords": ["remember", "memory", "record", "save this", "store this", "preference", "长期记忆", "记住", "记录到memory"],
+            "follow_up_skills": ["speak_and_report"],
         },
         "get_observation": {
             "action_type": "sense",
