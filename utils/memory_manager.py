@@ -3,6 +3,7 @@ Utilities for writing memory candidates after planner interactions.
 """
 
 import os
+import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -10,6 +11,7 @@ from typing import Dict, List, Optional
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEMORY_ROOT = os.path.join(REPO_ROOT, "agent", "memory")
 INBOX_ROOT = os.path.join(MEMORY_ROOT, "inbox")
+GLOBAL_MEMORY_PATH = os.path.join(MEMORY_ROOT, "global_memory.md")
 
 
 class MemoryManager:
@@ -59,14 +61,19 @@ class MemoryManager:
                 )
             )
 
+        persisted_memory = self._persist_explicit_long_term_memory(original_request)
+
         if self.verbose:
             print("🧠 Memory candidates written:")
             print(f"   Hardware: {hardware_path}")
             print(f"   Global:   {global_path}")
+            if persisted_memory:
+                print(f"   Long-term: {persisted_memory}")
 
         return {
             "hardware": hardware_path,
             "global": global_path,
+            **({"long_term": persisted_memory} if persisted_memory else {}),
         }
 
     def _render_candidate(
@@ -153,3 +160,77 @@ class MemoryManager:
                 lessons.append("Global memory should prefer robust recovery patterns over brittle assumptions.")
 
         return lessons
+
+    def _persist_explicit_long_term_memory(self, original_request: Optional[str]) -> Optional[str]:
+        request = (original_request or "").strip()
+        if not request:
+            return None
+
+        lesson = self._extract_explicit_memory_lesson(request)
+        if not lesson:
+            return None
+
+        if not os.path.exists(GLOBAL_MEMORY_PATH):
+            return None
+
+        with open(GLOBAL_MEMORY_PATH, "r", encoding="utf-8") as file:
+            content = file.read()
+
+        if lesson in content:
+            return None
+
+        marker = "Current entries:\n"
+        bullet = f"- {lesson}\n"
+        if marker in content:
+            updated = content.replace(marker, f"{marker}{bullet}", 1)
+        else:
+            updated = content.rstrip() + f"\n\nCurrent entries:\n{bullet}"
+
+        with open(GLOBAL_MEMORY_PATH, "w", encoding="utf-8") as file:
+            file.write(updated)
+
+        return GLOBAL_MEMORY_PATH
+
+    def _extract_explicit_memory_lesson(self, request: str) -> Optional[str]:
+        lowered = request.lower()
+        explicit_memory_signals = [
+            "记到memory",
+            "记到 memory",
+            "记进memory",
+            "记进 memory",
+            "记入memory",
+            "记入 memory",
+            "记住",
+            "长期记忆",
+            "长期偏好",
+            "remember this",
+            "remember that",
+            "record this",
+            "save this",
+            "save to memory",
+            "store this in memory",
+            "preference",
+        ]
+        if not any(signal in lowered for signal in explicit_memory_signals):
+            return None
+
+        if any(token in lowered for token in ["strictly sugar-free", "无糖", "控糖", "拒绝摄入任何含糖饮料", "含糖饮料"]):
+            return "User preference: strictly sugar-free; do not offer sugary drinks."
+
+        if any(token in lowered for token in ["allergic", "allergy", "过敏"]):
+            cleaned = self._compact_request(request)
+            return f"User health/safety preference to remember: {cleaned}"
+
+        if any(token in lowered for token in ["prefer", "preference", "喜欢", "偏好", "不喜欢", "忌口", "不要"]):
+            cleaned = self._compact_request(request)
+            return f"User preference to remember: {cleaned}"
+
+        cleaned = self._compact_request(request)
+        if not cleaned:
+            return None
+        return f"User explicitly asked to remember: {cleaned}"
+
+    def _compact_request(self, request: str) -> str:
+        compact = re.sub(r"\s+", " ", request).strip()
+        compact = compact.rstrip("。.!！?？")
+        return compact
