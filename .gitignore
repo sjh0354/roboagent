@@ -51,3 +51,6 @@ Thumbs.db
 
 # Local experiments
 experiments/
+
+# Personalized embodied-agent memory overlay
+agent/memory/local/

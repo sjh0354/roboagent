@@ -10,19 +10,33 @@ from utils.skill_resolver import SkillResolver
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENT_ROOT = os.path.join(REPO_ROOT, "agent")
+LOCAL_MEMORY_ROOT = os.path.join(AGENT_ROOT, "memory", "local")
 
 
 def _read_text(relative_path: str) -> str:
     path = os.path.join(AGENT_ROOT, relative_path)
+    return _read_text_from_path(path)
+
+
+def _read_text_from_path(path: str) -> str:
     with open(path, "r", encoding="utf-8") as file:
         return file.read().strip()
 
 
 def _optional_read(relative_path: str) -> str:
-    path = os.path.join(AGENT_ROOT, relative_path)
+    path = _resolve_optional_path(relative_path)
     if not os.path.exists(path):
         return ""
-    return _read_text(relative_path)
+    return _read_text_from_path(path)
+
+
+def _resolve_optional_path(relative_path: str) -> str:
+    if relative_path.startswith("memory/"):
+        suffix = relative_path[len("memory/"):]
+        local_path = os.path.join(LOCAL_MEMORY_ROOT, suffix)
+        if os.path.exists(local_path):
+            return local_path
+    return os.path.join(AGENT_ROOT, relative_path)
 
 
 def _build_sections(
