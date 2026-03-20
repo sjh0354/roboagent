@@ -62,7 +62,9 @@ class MemoryManager:
                 )
             )
 
-        persisted_memory = self._persist_explicit_long_term_memory(original_request)
+        persisted_memory = None
+        if not any(step.get("action") == "store_memory" for step in execution_history):
+            persisted_memory = self._persist_explicit_long_term_memory(original_request)
 
         if self.verbose:
             print("🧠 Memory candidates written:")
@@ -253,10 +255,16 @@ class MemoryManager:
 
         normalized_category = (category or "note").strip().lower()
         if normalized_category == "preference":
+            if cleaned.lower().startswith("user preference:"):
+                return cleaned
             return f"User preference: {cleaned}"
         if normalized_category in {"constraint", "restriction"}:
+            if cleaned.lower().startswith("user constraint:"):
+                return cleaned
             return f"User constraint: {cleaned}"
         if normalized_category == "safety":
+            if cleaned.lower().startswith("user safety note:"):
+                return cleaned
             return f"User safety note: {cleaned}"
         return cleaned
 

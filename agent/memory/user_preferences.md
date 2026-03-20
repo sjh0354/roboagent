@@ -4,7 +4,7 @@ Purpose:
 - Store durable user preferences and standing constraints that should be treated as high-priority context during planning.
 
 Current entries:
-- User preference: User preference: strictly sugar-free; do not offer sugary drinks
+- User preference: strictly sugar-free; do not offer sugary drinks.
 
 Update policy:
 - Keep entries short, stable, and actionable.

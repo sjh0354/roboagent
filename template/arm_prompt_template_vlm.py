@@ -105,6 +105,20 @@ If a visible object strongly matches a familiar package type, prefer a specific 
 `diet_coke`, `coke_zero`, `red_bull`, `mineral_water`, `fruit`, `snack`, or `medicine_box`
 over vague labels like `red can`, `black can`, or `drink`.
 
+Typical beverage priors in this environment:
+- bottled water / mineral water:
+  - sugar-free
+  - non-caffeinated
+  - safe default hydration option, but not useful when the user explicitly needs stimulation
+- sugar-free cola / Diet Coke / Coke Zero:
+  - sugar-free
+  - caffeinated
+  - often the best match when the user needs both no sugar and a wake-up effect
+- Red Bull or similar energy drink:
+  - caffeinated
+  - typically sugary unless clear sugar-free markings are visible
+  - do not choose it for a strict sugar-free user unless the package clearly indicates sugar-free
+
 **EXAMPLES OF CORRECT ACTION USAGE:**
 
 ✅ CORRECT:
@@ -282,6 +296,7 @@ Return ONE step in this JSON structure:
 1. **Observe Current State**: Analyze image to understand what has been accomplished
 2. **Enumerate Candidate Objects**: Internally identify the most likely visible object candidates before choosing one
 3. **Apply Request + Memory Constraints**: Combine current request with dialogue memory and long-term memory when available
+   - For drink selection, use the intersection of visible beverage attributes and remembered user constraints.
 4. **Plan Next Action**: Decide what needs to be done next
 5. **Assume Success**: All actions are assumed to execute successfully
 6. **Continue Planning**: Move to the next logical step
