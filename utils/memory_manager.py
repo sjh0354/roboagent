@@ -12,6 +12,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEMORY_ROOT = os.path.join(REPO_ROOT, "agent", "memory")
 INBOX_ROOT = os.path.join(MEMORY_ROOT, "inbox")
 GLOBAL_MEMORY_PATH = os.path.join(MEMORY_ROOT, "global_memory.md")
+USER_PREFERENCES_PATH = os.path.join(MEMORY_ROOT, "user_preferences.md")
 
 
 class MemoryManager:
@@ -87,7 +88,10 @@ class MemoryManager:
             return None
 
         normalized_scope = (scope or "global").strip().lower()
-        if normalized_scope in {"hardware", "profile", self.profile_name.lower()}:
+        normalized_category = (category or "note").strip().lower()
+        if normalized_category == "preference" and os.path.exists(USER_PREFERENCES_PATH):
+            path = USER_PREFERENCES_PATH
+        elif normalized_scope in {"hardware", "profile", self.profile_name.lower()}:
             path = os.path.join(MEMORY_ROOT, "hardware", f"{self.profile_name}_memory.md")
         else:
             path = GLOBAL_MEMORY_PATH

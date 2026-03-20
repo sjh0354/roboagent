@@ -34,6 +34,7 @@ def _build_sections(
     sections = [
         ("Bootstrap", _read_text("bootstrap.md")),
         ("Soul", _read_text("soul.md")),
+        ("High Priority User Preferences", _optional_read("memory/user_preferences.md")),
         ("Identity", _read_text(f"profiles/{profile_name}/identity.md")),
         ("Skills Index", _read_text(f"profiles/{profile_name}/skills_index.md")),
     ]
