@@ -273,6 +273,10 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
         # Current status
         context_parts.append(f"\n[CURRENT STATUS]: Planning step #{self.step_count + 1}")
 
+        hierarchical_memory_context = self._build_hierarchical_memory_context()
+        if hierarchical_memory_context:
+            context_parts.append(f"\n{hierarchical_memory_context}")
+
         transient_memory_context = self._build_transient_memory_context()
         if transient_memory_context:
             context_parts.append(f"\n{transient_memory_context}")
@@ -295,7 +299,10 @@ class AutonomousVLMPlanner(BaseVLMPlanner):
                 print(f"⚠️  Validation warning: {message}")
 
         try:
-            return json.loads(cleaned_text)
+            payload = json.loads(cleaned_text)
+            if isinstance(payload, dict):
+                return self._normalize_step_plan_payload(payload)
+            return payload
         except json.JSONDecodeError as e:
             if self.verbose:
                 print(f"❌ JSON parsing failed: {str(e)}")

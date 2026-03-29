@@ -234,12 +234,15 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             return
 
         next_step = step_plan["next_step"]
+        action_type = next_step.get("action_type")
+        action_name = next_step.get("action")
+        parameters = next_step.get("parameters") or {}
 
         # Record in execution history
         self.execution_history.append({
             "step_number": next_step.get("step_number"),
-            "action": next_step.get("action"),
-            "parameters": next_step.get("parameters"),
+            "action": action_name,
+            "parameters": parameters,
             "timestamp": datetime.now().isoformat()
         })
 
@@ -256,12 +259,21 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             print("="*70 + "\n")
 
         step_started_at = time.time()
-        # Update observation image based on action (simulation)
-        self._update_observation_after_action(next_step)
+        execution_result = None
+        if action_type in {"tool", "talk", "sense"}:
+            result = self.executor.execute_action(action_type, action_name, parameters)
+            execution_result = result.to_dict()
+            if result.data.get("observation_image"):
+                self.current_observation_image = result.data.get("observation_image")
+        else:
+            # Update observation image based on action (simulation)
+            self._update_observation_after_action(next_step)
         step_finished_at = time.time()
 
         # Mark as assumed successful
         self.execution_history[-1]["assumed_successful"] = True
+        if execution_result:
+            self.execution_history[-1]["execution_result"] = execution_result
         self.execution_history[-1]["duration_seconds"] = round(step_finished_at - step_started_at, 2)
         self.transient_memory_packet = self._build_transient_memory_packet(
             action_name=next_step.get("action", "unknown"),
@@ -322,6 +334,10 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         # Current status
         context_parts.append(f"\n[CURRENT STATUS]: Planning step #{self.step_count + 1}")
 
+        hierarchical_memory_context = self._build_hierarchical_memory_context()
+        if hierarchical_memory_context:
+            context_parts.append(f"\n{hierarchical_memory_context}")
+
         transient_memory_context = self._build_transient_memory_context()
         if transient_memory_context:
             context_parts.append(f"\n{transient_memory_context}")
@@ -344,7 +360,10 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
                 print(f"⚠️  Validation warning: {message}")
 
         try:
-            return json.loads(cleaned_text)
+            payload = json.loads(cleaned_text)
+            if isinstance(payload, dict):
+                return self._normalize_step_plan_payload(payload)
+            return payload
         except json.JSONDecodeError as e:
             if self.verbose:
                 print(f"❌ JSON parsing failed: {str(e)}")

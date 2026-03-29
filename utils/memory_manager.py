@@ -279,6 +279,9 @@ class MemoryManager:
         if entry in content:
             return
 
+        content = content.replace("- None.\n", "")
+        content = content.replace("- None.", "")
+
         marker = "Current entries:\n"
         bullet = f"- {entry}\n"
         if marker in content:

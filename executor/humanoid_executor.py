@@ -320,6 +320,18 @@ class HumanoidExecutor:
                 params.get("URL", ""),
                 params.get("query", "")
             )
+        elif action == "choose_web_option":
+            return self._choose_web_option(
+                option_id=params.get("option_id", ""),
+                option_text=params.get("option_text", ""),
+                service=params.get("service", ""),
+            )
+        elif action == "set_home_mode":
+            return self._set_home_mode(
+                option_id=params.get("option_id", ""),
+                option_text=params.get("option_text", ""),
+                device=params.get("device", ""),
+            )
 
         elif action == "query_weather_api":
             return self._query_weather_api(params)
@@ -337,6 +349,36 @@ class HumanoidExecutor:
                 feedback=f"Unknown tool action: {action}",
                 error=f"Action '{action}' not implemented"
             )
+
+    def _choose_web_option(self, option_id: str, option_text: str, service: str) -> ExecutionResult:
+        """Mock tool for no-visual web-choice benchmarks."""
+        label = option_text or "<missing option>"
+        target_service = service or "web_service"
+        return ExecutionResult(
+            success=True,
+            feedback=f"Selected web option {option_id or '?'} for {target_service}: {label}",
+            data={
+                "option_id": option_id,
+                "option_text": option_text,
+                "service": target_service,
+                "mock_action": True,
+            },
+        )
+
+    def _set_home_mode(self, option_id: str, option_text: str, device: str) -> ExecutionResult:
+        """Mock tool for no-visual home-mode selection benchmarks."""
+        label = option_text or "<missing option>"
+        target_device = device or "home_device"
+        return ExecutionResult(
+            success=True,
+            feedback=f"Selected home mode {option_id or '?'} for {target_device}: {label}",
+            data={
+                "option_id": option_id,
+                "option_text": option_text,
+                "device": target_device,
+                "mock_action": True,
+            },
+        )
 
     def _control_air_conditioner(self, action: str, temperature: Optional[int]) -> ExecutionResult:
         """Control air conditioner"""

@@ -37,6 +37,18 @@ ACTION_SCHEMAS: Dict[str, Dict[str, Dict[str, object]]] = {
             "keywords": ["search", "look up", "find online", "web", "internet"],
             "follow_up_skills": ["speak_and_report"],
         },
+        "choose_web_option": {
+            "action_type": "tool",
+            "skill": "choose_web_option",
+            "keywords": ["ticket", "book", "booking", "route", "hotel", "delivery", "order", "ride", "cafe", "travel", "train", "flight", "bus"],
+            "follow_up_skills": [],
+        },
+        "set_home_mode": {
+            "action_type": "tool",
+            "skill": "set_home_mode",
+            "keywords": ["mode", "alarm", "blinds", "doorbell", "vacuum", "purifier", "lighting", "light", "hvac", "media", "exhaust", "air"],
+            "follow_up_skills": [],
+        },
         "query_weather_api": {
             "action_type": "tool",
             "skill": "query_weather",

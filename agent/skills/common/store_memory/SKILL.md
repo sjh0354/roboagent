@@ -3,6 +3,7 @@
 Use when:
 - The user explicitly asks you to remember, record, save, or store a durable fact or preference.
 - The task is primarily a memory update rather than a physical action.
+- Treat phrases like "请记住", "以后默认按这个来", "这是长期偏好", and "除非我明确要求，否则都按这个来" as explicit triggers.
 
 Action:
 - `store_memory`
@@ -44,6 +45,7 @@ Rules:
 - Only store information that is stable and likely to matter again.
 - Prefer compact normalized wording over copying the full user utterance.
 - Use `global` for user preferences that should apply across robots.
+- If the request is mainly to define a durable preference, the first action should usually be `store_memory`, not `speak`.
 - After a successful memory write, give at most one short confirmation, then end the task.
 
 Examples:

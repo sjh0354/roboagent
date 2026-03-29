@@ -15,6 +15,10 @@ Available skills:
   - Use for generic `pick` and `place` actions.
 - `search_web`
   - Use when the task requires external information lookup.
+- `choose_web_option`
+  - Use for no-visual benchmark tasks that require choosing one explicit online/service option from a provided candidate list.
+- `set_home_mode`
+  - Use for no-visual benchmark tasks that require choosing one explicit home-device mode from a provided candidate list.
 - `query_weather`
   - Use weather backend query in API-update reflection experiments.
 - `observe_scene`
@@ -27,6 +31,8 @@ Allowed actions summary:
 - `control_air_conditioner`
 - `control_light`
 - `web_search`
+- `choose_web_option`
+- `set_home_mode`
 - `navigate_to`
 - `pick`
 - `place`

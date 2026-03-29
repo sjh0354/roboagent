@@ -386,6 +386,20 @@ If the user's request is only to remember or record a durable preference, constr
 3. Then finish the task with `next_step: null`.
 4. Do not keep repeating readiness messages after the memory write is complete.
 
+Treat the request as an explicit memory-write task when the user says things like:
+- "请记住"
+- "记一下这个长期偏好"
+- "以后默认按这个偏好处理"
+- "除非我明确要求，否则都按这个来"
+- "remember this preference"
+- "save this for later"
+
+For these explicit memory-write requests:
+- Prefer `store_memory` over `speak`, `send_agent_message`, or any physical action.
+- The first action should usually be `store_memory`.
+- Normalize the preference into short reusable wording instead of copying the whole user sentence.
+- If the user is defining a stable cross-task personal preference, use `category=preference` and usually `scope=global`.
+
 Memory routing:
 - User preference or standing user constraint:
   - use `category=preference`
@@ -394,6 +408,40 @@ Memory routing:
   - use `scope=global`
 - UR5e-only operational lesson:
   - use `scope=hardware`
+
+**Example: Explicit Long-Term Preference Write**
+
+**Human Request**: "请记住这个长期偏好：如果没有明确要求，我默认选原味、清淡的零食，不要甜味零食。"
+
+**Correct first action**:
+```json
+{
+  "current_step_analysis": {
+    "visual_state": "No image-dependent action is needed for this request.",
+    "task_progress": "The task is an explicit durable preference write.",
+    "next_action_reasoning": "The user explicitly asked to store a stable long-term preference, so I should persist it before any confirmation."
+  },
+  "next_step": {
+    "step_number": 1,
+    "agent": "ur5e_arm",
+    "location": "store",
+    "action": "store_memory",
+    "action_type": "tool",
+    "parameters": {
+      "content": "default to plain mild snacks; avoid sweet snacks unless explicitly requested",
+      "scope": "global",
+      "category": "preference"
+    }
+  },
+  "needs_human_input": false,
+  "humanoid_question": null
+}
+```
+
+Incorrect response pattern:
+- replying only with `speak`
+- explaining the preference without calling `store_memory`
+- jumping to `pick_and_place` or `get_observation`
 
 ## Important Reminders
 
@@ -433,6 +481,19 @@ def get_arm_legacy_system_prompt():
     return ARM_VLM_SYSTEM_PROMPT
 
 
+def _get_context_window_tokens(model: str) -> int:
+    env_key = f"PLANNER_CONTEXT_WINDOW_TOKENS_{model.upper().replace('-', '_').replace('.', '_')}"
+    if os.getenv(env_key):
+        return int(os.getenv(env_key, "128000"))
+    conservative_defaults = {
+        "gemini-2.0-flash-exp": 128000,
+        "gemini-2.0-flash-thinking-exp-01-21": 128000,
+        "gemini-3-pro-preview": 128000,
+        "gemini-2.5-flash-lite": 128000,
+    }
+    return conservative_defaults.get(model, int(os.getenv("PLANNER_CONTEXT_WINDOW_TOKENS", "128000")))
+
+
 def get_arm_vlm_config(model_name=None):
     """
     Get configuration for Gemini VLM models (arm)
@@ -450,25 +511,29 @@ def get_arm_vlm_config(model_name=None):
             "model": "gemini-2.0-flash-exp",
             "base_url": None,
             "max_tokens": 2000,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "context_window_tokens": _get_context_window_tokens("gemini-2.0-flash-exp"),
         },
         "gemini-2.0-flash-thinking-exp-01-21": {
             "model": "gemini-2.0-flash-thinking-exp-01-21",
             "base_url": None,
             "max_tokens": 3000,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "context_window_tokens": _get_context_window_tokens("gemini-2.0-flash-thinking-exp-01-21"),
         },
         "gemini-3-pro-preview": {
             "model": "gemini-3-pro-preview",
             "base_url": None,
             "max_tokens": 3000,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "context_window_tokens": _get_context_window_tokens("gemini-3-pro-preview"),
         },
         "gemini-2.5-flash-lite": {
             "model": "gemini-2.5-flash-lite",
             "base_url": None,
             "max_tokens": 2000,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "context_window_tokens": _get_context_window_tokens("gemini-2.5-flash-lite"),
         }
     }
 
@@ -481,7 +546,8 @@ def get_arm_vlm_config(model_name=None):
         "model": model,
         "base_url": None,
         "max_tokens": 2000,
-        "temperature": 0.7
+        "temperature": 0.7,
+        "context_window_tokens": _get_context_window_tokens(model),
     }
 
 

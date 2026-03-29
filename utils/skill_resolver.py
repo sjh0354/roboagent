@@ -12,6 +12,8 @@ COMMON_SKILLS = {
     "store_memory": "skills/common/store_memory/SKILL.md",
     "observe_scene": "skills/common/observe_scene/SKILL.md",
     "search_web": "skills/common/search_web/SKILL.md",
+    "choose_web_option": "skills/common/choose_web_option/SKILL.md",
+    "set_home_mode": "skills/common/set_home_mode/SKILL.md",
     "query_weather": "skills/common/query_weather/SKILL.md",
 }
 
@@ -58,6 +60,10 @@ class SkillResolver:
 
     def _resolve_from_request(self, request: str) -> set[str]:
         skill_names: set[str] = set()
+        if self._is_explicit_memory_write_request(request):
+            skill_names.add("store_memory")
+            return skill_names
+
         for action_name, schema in ACTION_SCHEMAS.get(self.profile_name, {}).items():
             keywords = schema.get("keywords", [])
             if any(term in request for term in keywords):
@@ -72,6 +78,23 @@ class SkillResolver:
         ):
             skill_names.add("navigate_rooms")
         return skill_names
+
+    def _is_explicit_memory_write_request(self, request: str) -> bool:
+        triggers = [
+            "请记住",
+            "记住这个长期偏好",
+            "记一下这个长期偏好",
+            "以后默认",
+            "除非我明确要求",
+            "长期偏好",
+            "remember this",
+            "remember this preference",
+            "save this",
+            "save this preference",
+            "store this preference",
+        ]
+        request_lower = request.lower()
+        return any(trigger in request or trigger in request_lower for trigger in triggers)
 
     def _resolve_from_history(self, history: List[Dict]) -> set[str]:
         skill_names: set[str] = set()
