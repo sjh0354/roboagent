@@ -10,7 +10,9 @@ from typing import Any, Callable, Dict, List, Optional
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUNTIME_ROOT = os.path.join(REPO_ROOT, "agent", "memory", "local", "runtime")
+MEMORY_ROOT = os.path.join(REPO_ROOT, "agent", "memory")
+DEFAULT_LOCAL_MEMORY_ROOT = os.path.join(MEMORY_ROOT, "local")
+RUNTIME_ROOT = os.path.join(DEFAULT_LOCAL_MEMORY_ROOT, "runtime")
 RAW_ROOT = os.path.join(RUNTIME_ROOT, "raw")
 SHORT_TERM_ROOT = os.path.join(RUNTIME_ROOT, "short_term")
 LONG_TERM_ROOT = os.path.join(RUNTIME_ROOT, "long_term")
@@ -19,6 +21,15 @@ INDEX_PATH = os.path.join(RUNTIME_ROOT, "index.json")
 
 
 SummaryCallback = Callable[[str, str, Dict[str, Any]], Dict[str, str]]
+
+
+def get_runtime_root() -> str:
+    local_root = os.getenv("AGENT_LOCAL_MEMORY_ROOT", DEFAULT_LOCAL_MEMORY_ROOT)
+    return os.path.join(local_root, "runtime")
+
+
+def get_local_memory_root() -> str:
+    return os.getenv("AGENT_LOCAL_MEMORY_ROOT", DEFAULT_LOCAL_MEMORY_ROOT)
 
 
 class HierarchicalMemoryManager:
@@ -32,7 +43,7 @@ class HierarchicalMemoryManager:
     ):
         self.profile_name = profile_name
         self.verbose = verbose
-        self.runtime_root = runtime_root or RUNTIME_ROOT
+        self.runtime_root = runtime_root or get_runtime_root()
         self.raw_root = os.path.join(self.runtime_root, "raw")
         self.short_term_root = os.path.join(self.runtime_root, "short_term")
         self.long_term_root = os.path.join(self.runtime_root, "long_term")
@@ -359,10 +370,10 @@ class HierarchicalMemoryManager:
             if entry.get("device") == self.profile_name
             and entry.get("level") == "short_term"
             and entry.get("include_in_context", True)
+            and (not session_id or entry.get("source_session_id") == session_id)
         ]
         short_term_entries = sorted(short_term_entries, key=lambda item: item.get("created_at", ""))[-self.short_term_context_max_items:]
-        short_term_section = self._render_context_entries_with_budget(
-            title="SHORT-TERM HISTORY SUMMARIES",
+        short_term_section = self._render_short_term_entries_with_budget(
             entries=short_term_entries,
             max_tokens=bucket_tokens["short_term"],
         )
@@ -548,6 +559,51 @@ class HierarchicalMemoryManager:
             return ""
         return "\n".join([f"[{title}]"] + selected)
 
+    def _render_short_term_entries_with_budget(
+        self,
+        entries: List[Dict[str, Any]],
+        max_tokens: int,
+    ) -> str:
+        if not entries or max_tokens <= 0:
+            return ""
+
+        title = "CURRENT SESSION SHORT-TERM OBJECTIVE"
+        guardrail = (
+            "Lower priority than long-term preferences, safety rules, and dietary "
+            "constraints. Use only to choose among options that already satisfy them."
+        )
+        selected: List[str] = []
+        used_tokens = self._estimate_tokens(f"[{title}]\n{guardrail}")
+
+        for entry in reversed(entries):
+            path = self._absolute_path(entry["path"])
+            summary_sections = self._extract_summary_sections(self._read_text(path))
+            current_needs = summary_sections.get("Current needs", [])[:1]
+            time_constraints = summary_sections.get("Time constraints", [])[:1]
+            lines: List[str] = []
+            for need in current_needs:
+                lines.append(f"- objective: {need}")
+            for constraint in time_constraints:
+                lines.append(f"- deadline: {constraint}")
+            if not lines:
+                continue
+            block = "\n".join(lines)
+            block_tokens = self._estimate_tokens(block)
+            if selected and used_tokens + block_tokens > max_tokens:
+                continue
+            if not selected and block_tokens > max_tokens:
+                clipped = self._truncate_text_to_tokens(block, max(40, max_tokens - 24))
+                block = clipped
+                block_tokens = self._estimate_tokens(block)
+            selected.insert(0, block)
+            used_tokens += block_tokens
+            if used_tokens >= max_tokens:
+                break
+
+        if not selected:
+            return ""
+        return "\n".join([f"[{title}]", guardrail] + selected)
+
     def _render_raw_events_text(self, raw_events: List[Dict[str, Any]]) -> str:
         chunks = []
         for event in raw_events:
@@ -622,9 +678,26 @@ class HierarchicalMemoryManager:
     def _extract_summary_body(self, markdown_text: str) -> str:
         marker = "Summary:\n"
         if marker not in markdown_text:
-            return self._truncate_text_to_tokens(markdown_text.strip(), 80)
-        summary = markdown_text.split(marker, 1)[1].strip()
-        return self._truncate_text_to_tokens(summary, 80)
+            return markdown_text.strip()
+        return markdown_text.split(marker, 1)[1].strip()
+
+    def _extract_summary_sections(self, markdown_text: str) -> Dict[str, List[str]]:
+        summary_body = self._extract_summary_body(markdown_text)
+        sections: Dict[str, List[str]] = {}
+        current_title: Optional[str] = None
+        for raw_line in summary_body.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.endswith(":") and not line.startswith("-"):
+                current_title = line[:-1].strip()
+                sections.setdefault(current_title, [])
+                continue
+            if line.startswith("-") and current_title:
+                item = line[1:].strip()
+                if item:
+                    sections.setdefault(current_title, []).append(item)
+        return sections
 
     def _truncate_text_to_tokens(self, text: str, max_tokens: int, from_end: bool = False) -> str:
         cleaned = (text or "").strip()
@@ -652,11 +725,20 @@ class HierarchicalMemoryManager:
         return compact[:48] or "general"
 
     def _relative_path(self, path: str) -> str:
-        return os.path.relpath(path, REPO_ROOT)
+        absolute = os.path.abspath(path)
+        local_root = os.path.abspath(get_local_memory_root())
+        if absolute == local_root or absolute.startswith(local_root + os.sep):
+            relative_local = os.path.relpath(absolute, local_root)
+            return f"$LOCAL/{relative_local}"
+        return os.path.relpath(absolute, REPO_ROOT)
 
     def _absolute_path(self, path: str) -> str:
         if os.path.isabs(path):
             return path
+        if path == "$LOCAL":
+            return get_local_memory_root()
+        if path.startswith("$LOCAL/"):
+            return os.path.join(get_local_memory_root(), path[len("$LOCAL/"):])
         return os.path.join(REPO_ROOT, path)
 
     def _read_text(self, path: str) -> str:

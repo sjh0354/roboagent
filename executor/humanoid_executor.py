@@ -506,6 +506,13 @@ class HumanoidExecutor:
                 feedback="Memory write failed",
                 error="memory_write_failed",
             )
+        if not self.memory_manager.is_memory_entry_visible(path, content=content, category=category):
+            return ExecutionResult(
+                success=False,
+                feedback="Memory write returned a path but the entry is not visible on disk",
+                data={"content": content, "scope": scope, "category": category, "path": path},
+                error="memory_write_not_visible",
+            )
 
         return ExecutionResult(
             success=True,

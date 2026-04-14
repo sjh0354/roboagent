@@ -10,7 +10,11 @@ from utils.skill_resolver import SkillResolver
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AGENT_ROOT = os.path.join(REPO_ROOT, "agent")
-LOCAL_MEMORY_ROOT = os.path.join(AGENT_ROOT, "memory", "local")
+DEFAULT_LOCAL_MEMORY_ROOT = os.path.join(AGENT_ROOT, "memory", "local")
+
+
+def _local_memory_root() -> str:
+    return os.getenv("AGENT_LOCAL_MEMORY_ROOT", DEFAULT_LOCAL_MEMORY_ROOT)
 
 
 def _read_text(relative_path: str) -> str:
@@ -33,7 +37,7 @@ def _optional_read(relative_path: str) -> str:
 def _resolve_optional_path(relative_path: str) -> str:
     if relative_path.startswith("memory/"):
         suffix = relative_path[len("memory/"):]
-        local_path = os.path.join(LOCAL_MEMORY_ROOT, suffix)
+        local_path = os.path.join(_local_memory_root(), suffix)
         if os.path.exists(local_path):
             return local_path
     return os.path.join(AGENT_ROOT, relative_path)

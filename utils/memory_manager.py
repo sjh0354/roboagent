@@ -11,10 +11,14 @@ from typing import Dict, List, Optional
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEMORY_ROOT = os.path.join(REPO_ROOT, "agent", "memory")
-LOCAL_MEMORY_ROOT = os.path.join(MEMORY_ROOT, "local")
+DEFAULT_LOCAL_MEMORY_ROOT = os.path.join(MEMORY_ROOT, "local")
 INBOX_ROOT = os.path.join(MEMORY_ROOT, "inbox")
 GLOBAL_MEMORY_REL = "global_memory.md"
 USER_PREFERENCES_REL = "user_preferences.md"
+
+
+def get_local_memory_root() -> str:
+    return os.getenv("AGENT_LOCAL_MEMORY_ROOT", DEFAULT_LOCAL_MEMORY_ROOT)
 
 
 class MemoryManager:
@@ -25,7 +29,7 @@ class MemoryManager:
         self.verbose = verbose
         self.hardware_inbox = os.path.join(INBOX_ROOT, "hardware")
         self.global_inbox = os.path.join(INBOX_ROOT, "global")
-        os.makedirs(LOCAL_MEMORY_ROOT, exist_ok=True)
+        os.makedirs(get_local_memory_root(), exist_ok=True)
         os.makedirs(self.hardware_inbox, exist_ok=True)
         os.makedirs(self.global_inbox, exist_ok=True)
 
@@ -106,6 +110,17 @@ class MemoryManager:
 
         self._append_memory_entry(path, entry)
         return path
+
+    def normalize_memory_entry(self, content: str, category: str = "note") -> Optional[str]:
+        return self._normalize_memory_entry(content=content, category=category)
+
+    def is_memory_entry_visible(self, path: str, content: str, category: str = "note") -> bool:
+        normalized = self._normalize_memory_entry(content=content, category=category)
+        if not normalized or not path or not os.path.exists(path):
+            return False
+        with open(path, "r", encoding="utf-8") as file:
+            snapshot = file.read()
+        return normalized in snapshot
 
     def _render_candidate(
         self,
@@ -293,7 +308,7 @@ class MemoryManager:
             file.write(updated)
 
     def _resolve_memory_write_path(self, relative_path: str) -> str:
-        local_path = os.path.join(LOCAL_MEMORY_ROOT, relative_path)
+        local_path = os.path.join(get_local_memory_root(), relative_path)
         base_path = os.path.join(MEMORY_ROOT, relative_path)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         if not os.path.exists(local_path):

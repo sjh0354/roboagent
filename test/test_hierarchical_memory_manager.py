@@ -153,3 +153,58 @@ def test_context_block_uses_budgeted_layers_and_pending_raw_tail(tmp_path, monke
     assert "[LONG-TERM OVERVIEW]" in context
     assert "overview" in context
     assert "unsummarized raw tail" in context
+
+
+def test_short_term_context_only_injects_current_needs_and_guardrail(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMORY_CONTEXT_BUDGET_TOKENS", "260")
+    monkeypatch.setenv("MEMORY_OVERVIEW_BUDGET_RATIO", "0.10")
+    monkeypatch.setenv("MEMORY_LONGTERM_BUDGET_RATIO", "0.10")
+    monkeypatch.setenv("MEMORY_SHORTTERM_BUDGET_RATIO", "0.60")
+    monkeypatch.setenv("MEMORY_RAW_BUDGET_RATIO", "0.20")
+
+    manager = HierarchicalMemoryManager(
+        profile_name="ur5e",
+        verbose=False,
+        runtime_root=str(tmp_path / "runtime"),
+    )
+    session_id = manager.start_session(
+        session_id="ur5e-20260327-120000",
+        started_at=datetime(2026, 3, 27, 12, 0, 0),
+    )
+
+    manager.store_active_context_summary(
+        session_id=session_id,
+        source_text="demo source",
+        summary_callback=lambda level, source_text, metadata: {
+            "topic": "coordination_completion",
+            "summary": "\n".join(
+                [
+                    "Current needs:",
+                    "- user is feeling sleepy",
+                    "- user has a headache",
+                    "",
+                    "Forbidden items:",
+                    "- Do not offer sugary drinks.",
+                    "",
+                    "Decision rules:",
+                    "- prioritize those that offer sustained energy and mental stimulation.",
+                    "",
+                    "Soft preferences:",
+                    "- prioritize items that provide sustained energy",
+                ]
+            ),
+        },
+        created_at=datetime(2026, 3, 27, 12, 1, 0),
+        trigger_reason="coordination_completion",
+    )
+
+    context = manager.build_context_block(session_id=session_id)
+
+    assert context is not None
+    assert "[SHORT-TERM NEEDS UNDER LONG-TERM CONSTRAINTS]" in context
+    assert "These temporary needs must not override long-term preferences" in context
+    assert "need: user is feeling sleepy" in context
+    assert "need: user has a headache" in context
+    assert "forbidden: Do not offer sugary drinks." in context
+    assert "prioritize those that offer sustained energy" not in context
+    assert "prioritize items that provide sustained energy" not in context

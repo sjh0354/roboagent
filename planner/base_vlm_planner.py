@@ -2,6 +2,7 @@
 Shared runtime for modular VLM planners.
 """
 
+import ast
 import json
 import os
 import re
@@ -575,13 +576,24 @@ class BaseVLMPlanner:
             next_step.setdefault("step_number", next_step_number)
             if not next_step.get("action_type"):
                 next_step["action_type"] = self._infer_action_type(next_step.get("action"))
-            next_step.setdefault("parameters", {})
+            aliased_parameters = self._extract_aliased_parameters(payload)
+            current_parameters = next_step.get("parameters")
+            if isinstance(current_parameters, dict) and current_parameters:
+                next_step["parameters"] = current_parameters
+            elif isinstance(aliased_parameters, dict) and aliased_parameters:
+                next_step["parameters"] = aliased_parameters
+            else:
+                next_step.setdefault("parameters", {})
             payload.setdefault("needs_human_input", False)
             return payload
 
         legacy_action = payload.get("action")
         if isinstance(legacy_action, dict):
-            skill = legacy_action.get("skill") or legacy_action.get("action")
+            skill = (
+                legacy_action.get("skill")
+                or legacy_action.get("action")
+                or legacy_action.get("action_name")
+            )
             parameters = (
                 legacy_action.get("parameters")
                 or legacy_action.get("args")
@@ -592,7 +604,7 @@ class BaseVLMPlanner:
                 payload["next_step"] = {
                     "step_number": next_step_number,
                     "action": skill,
-                    "action_type": self._infer_action_type(skill),
+                    "action_type": legacy_action.get("action_type") or self._infer_action_type(skill),
                     "parameters": parameters if isinstance(parameters, dict) else {},
                 }
                 payload.setdefault(
@@ -604,17 +616,11 @@ class BaseVLMPlanner:
                     },
                 )
                 payload.setdefault("needs_human_input", False)
-                return payload
+            return payload
 
         if isinstance(payload.get("action"), str):
             action_name = payload.get("action")
-            parameters = (
-                payload.get("parameters")
-                or payload.get("args")
-                or payload.get("action_args")
-                or payload.get("action_arguments")
-                or {}
-            )
+            parameters = self._extract_aliased_parameters(payload) or {}
             payload["next_step"] = {
                 "step_number": next_step_number,
                 "action": action_name,
@@ -632,10 +638,24 @@ class BaseVLMPlanner:
             payload.setdefault("needs_human_input", False)
             return payload
 
+        tool_code_step = self._extract_tool_code_next_step(payload.get("tool_code"), next_step_number)
+        if tool_code_step:
+            payload["next_step"] = tool_code_step
+            payload.setdefault(
+                "current_step_analysis",
+                {
+                    "visual_state": "",
+                    "task_progress": "",
+                    "next_action_reasoning": "",
+                },
+            )
+            payload.setdefault("needs_human_input", False)
+            return payload
+
         if isinstance(payload.get("module"), str):
             module_name = str(payload.get("module", "")).strip()
             action_name = module_name.split("/")[-1] if module_name else ""
-            parameters = payload.get("parameters") or {}
+            parameters = self._extract_aliased_parameters(payload) or {}
             if action_name:
                 payload["next_step"] = {
                     "step_number": next_step_number,
@@ -653,6 +673,72 @@ class BaseVLMPlanner:
                 )
                 payload.setdefault("needs_human_input", False)
         return payload
+
+    def _extract_aliased_parameters(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        for key in (
+            "parameters",
+            "args",
+            "action_args",
+            "action_arguments",
+            "action_parameters",
+            "action_config",
+        ):
+            value = payload.get(key)
+            if isinstance(value, dict) and value:
+                return value
+        return {}
+
+    def _extract_tool_code_next_step(
+        self,
+        tool_code: Any,
+        step_number: int,
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(tool_code, str) or not tool_code.strip():
+            return None
+        call_node = self._parse_tool_code_call(tool_code)
+        if call_node is None:
+            return None
+        action_name = self._extract_call_name(call_node.func)
+        if not action_name:
+            return None
+        parameters: Dict[str, Any] = {}
+        for keyword in call_node.keywords:
+            if not keyword.arg:
+                continue
+            try:
+                parameters[keyword.arg] = ast.literal_eval(keyword.value)
+            except Exception:
+                continue
+        return {
+            "step_number": step_number,
+            "action": action_name,
+            "action_type": self._infer_action_type(action_name),
+            "parameters": parameters,
+        }
+
+    def _parse_tool_code_call(self, tool_code: str) -> Optional[ast.Call]:
+        try:
+            parsed = ast.parse(tool_code.strip(), mode="exec")
+        except SyntaxError:
+            return None
+        if not parsed.body:
+            return None
+        first_stmt = parsed.body[0]
+        if not isinstance(first_stmt, ast.Expr) or not isinstance(first_stmt.value, ast.Call):
+            return None
+        outer_call = first_stmt.value
+        if self._extract_call_name(outer_call.func) == "print" and outer_call.args:
+            first_arg = outer_call.args[0]
+            if isinstance(first_arg, ast.Call):
+                return first_arg
+        return outer_call
+
+    def _extract_call_name(self, func_node: ast.AST) -> Optional[str]:
+        if isinstance(func_node, ast.Name):
+            return func_node.id
+        if isinstance(func_node, ast.Attribute):
+            return func_node.attr
+        return None
 
     def _infer_action_type(self, action_name: Optional[str]) -> str:
         if not action_name:
@@ -687,10 +773,40 @@ class BaseVLMPlanner:
             "You are a memory compaction assistant for an embodied planner. "
             "Do not summarize chronology. Extract the durable decision rules future planning must obey. "
             "Return strict JSON with keys: "
-            "topic, hard_preferences, soft_preferences, current_needs, forbidden_items, decision_rules, stable_user_preferences. "
+            "topic, hard_preferences, soft_preferences, current_needs, time_constraints, forbidden_items, decision_rules, stable_user_preferences, priority_order, evidence_snippets. "
             "The topic must be a short lowercase slug with underscores. "
-            "Each list item must be concise, factual, and action-guiding."
+            "Each list item must be concise, factual, and action-guiding. "
+            "Preserve hard constraints and decision priority even if they seem repetitive. "
+            "Never collapse a hard constraint into a soft preference."
         )
+        level_specific_guidance = [
+            "Extract only the information that should affect future decisions.",
+            "Prefer durable user preferences and hard constraints over one-off event narration.",
+            "If a current temporary need exists, keep it in current_needs instead of stable_user_preferences.",
+        ]
+        if level == "short_term":
+            level_specific_guidance.extend(
+                [
+                    "For short_term summaries, capture only the current-session objective, active deadline, and a fixed low-priority notice.",
+                    "Treat the temporary need as conditional guidance inside existing durable constraints.",
+                    "Never let current_needs or decision_rules override durable user preferences, dietary rules, or safety constraints.",
+                    "If there is tension, encode the rule as: satisfy the temporary need only within the boundary of durable constraints.",
+                    "Use time_constraints only for the single most important active deadline or immediate timing pressure in this task.",
+                    "current_needs should contain at most one concise item.",
+                    "time_constraints should contain at most one concise item.",
+                    "soft_preferences should usually be empty for short_term summaries.",
+                    "stable_user_preferences should usually be empty for short_term summaries unless the source is explicitly a durable preference statement that should later be promoted.",
+                    "Do not create a new durable preference from a one-off request.",
+                    "priority_order should usually be a single fixed notice that this short-term objective is lower priority than long-term preferences, safety rules, and dietary constraints.",
+                ]
+            )
+        elif level == "long_term_overview":
+            level_specific_guidance.extend(
+                [
+                    "For long_term_overview, retain only the most decision-critical stable rules that still matter across cases.",
+                    "Keep hard constraints, stable tradeoff rules, and recurring time-sensitive patterns if they influence future choices.",
+                ]
+            )
         user_prompt = "\n".join(
             [
                 f"Level: {level}",
@@ -698,9 +814,7 @@ class BaseVLMPlanner:
                 f"Trigger: {metadata.get('trigger_reason', 'unknown')}",
                 f"Suggested topic: {rule_topic or fallback_topic}",
                 "",
-                "Extract only the information that should affect future decisions.",
-                "Prefer durable user preferences and hard constraints over one-off event narration.",
-                "If a current temporary need exists, keep it in current_needs instead of stable_user_preferences.",
+                *level_specific_guidance,
                 "",
                 "Source text:",
                 source_text,
@@ -718,6 +832,7 @@ class BaseVLMPlanner:
             )
             parsed = self._parse_summary_json(response.choices[0].message.content)
             merged = self._merge_rule_memory_payload(
+                level=level,
                 heuristic_payload=heuristic_payload,
                 parsed_payload=parsed,
                 fallback_topic=rule_topic or fallback_topic,
@@ -751,9 +866,12 @@ class BaseVLMPlanner:
             "hard_preferences": self._coerce_list_field(data.get("hard_preferences")),
             "soft_preferences": self._coerce_list_field(data.get("soft_preferences")),
             "current_needs": self._coerce_list_field(data.get("current_needs")),
+            "time_constraints": self._coerce_list_field(data.get("time_constraints")),
             "forbidden_items": self._coerce_list_field(data.get("forbidden_items")),
             "decision_rules": self._coerce_list_field(data.get("decision_rules")),
             "stable_user_preferences": self._coerce_list_field(data.get("stable_user_preferences")),
+            "priority_order": self._coerce_list_field(data.get("priority_order")),
+            "evidence_snippets": self._coerce_list_field(data.get("evidence_snippets")),
         }
 
     def _coerce_list_field(self, value: Any) -> List[str]:
@@ -766,6 +884,7 @@ class BaseVLMPlanner:
     def _merge_rule_memory_payload(
         self,
         *,
+        level: str,
         heuristic_payload: Dict[str, Any],
         parsed_payload: Dict[str, Any],
         fallback_topic: str,
@@ -775,12 +894,115 @@ class BaseVLMPlanner:
             "hard_preferences": parsed_payload.get("hard_preferences") or heuristic_payload["hard_preferences"],
             "soft_preferences": parsed_payload.get("soft_preferences") or heuristic_payload["soft_preferences"],
             "current_needs": parsed_payload.get("current_needs") or heuristic_payload["current_needs"],
+            "time_constraints": parsed_payload.get("time_constraints") or heuristic_payload["time_constraints"],
             "forbidden_items": parsed_payload.get("forbidden_items") or heuristic_payload["forbidden_items"],
             "decision_rules": parsed_payload.get("decision_rules") or heuristic_payload["decision_rules"],
             "stable_user_preferences": parsed_payload.get("stable_user_preferences") or heuristic_payload["stable_user_preferences"],
+            "priority_order": parsed_payload.get("priority_order") or heuristic_payload["priority_order"],
+            "evidence_snippets": parsed_payload.get("evidence_snippets") or heuristic_payload["evidence_snippets"],
         }
+        if level == "short_term":
+            merged = self._sanitize_short_term_rule_payload(
+                merged_payload=merged,
+                heuristic_payload=heuristic_payload,
+            )
         merged["summary"] = self._render_rule_memory_summary(merged)
         return merged
+
+    def _sanitize_short_term_rule_payload(
+        self,
+        *,
+        merged_payload: Dict[str, Any],
+        heuristic_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        def _keep_short_term_soft_preference(rule: str) -> bool:
+            lowered = str(rule or "").lower()
+            if not lowered:
+                return False
+            blocked_markers = [
+                "prioritize items that provide sustained energy",
+                "prioritize items that are mentally stimulating",
+                "mental stimulation",
+                "sustained energy",
+                "provide energy",
+                "offer sustained energy",
+            ]
+            if any(marker in lowered for marker in blocked_markers):
+                return False
+            allowed_markers = [
+                "allowed",
+                "within the boundary",
+                "within durable constraints",
+                "safe fallback",
+                "water remains a safe fallback",
+            ]
+            return any(marker in lowered for marker in allowed_markers)
+
+        def _keep_short_term_decision_rule(rule: str) -> bool:
+            lowered = str(rule or "").lower()
+            if not lowered:
+                return False
+            required_markers = [
+                "durable user preferences",
+                "hard constraints",
+                "dietary restrictions",
+                "satisfy the temporary need only within",
+                "temporary needs only after preserving",
+                "never override durable user preferences",
+                "allowed drink",
+                "allowed option",
+            ]
+            if any(marker in lowered for marker in required_markers):
+                return True
+            blocked_markers = [
+                "prioritize those that offer sustained energy",
+                "mental stimulation",
+                "provide sustained energy",
+                "provide energy",
+            ]
+            return not any(marker in lowered for marker in blocked_markers)
+
+        sanitized = dict(merged_payload)
+        parsed_soft_preferences = merged_payload.get("soft_preferences") or []
+        parsed_decision_rules = merged_payload.get("decision_rules") or []
+
+        kept_soft_preferences = [
+            rule for rule in parsed_soft_preferences if _keep_short_term_soft_preference(rule)
+        ]
+        kept_decision_rules = [
+            rule for rule in parsed_decision_rules if _keep_short_term_decision_rule(rule)
+        ]
+
+        heuristic_soft_preferences = heuristic_payload.get("soft_preferences") or []
+        heuristic_decision_rules = heuristic_payload.get("decision_rules") or []
+
+        if heuristic_soft_preferences:
+            kept_soft_preferences.extend(heuristic_soft_preferences)
+        if heuristic_decision_rules:
+            kept_decision_rules = heuristic_decision_rules + kept_decision_rules
+
+        fixed_low_priority_notice = (
+            "Lower priority than long-term preferences, safety rules, and dietary constraints. "
+            "Use only to choose among options that already satisfy those constraints."
+        )
+        current_needs = self._dedupe_rules(merged_payload.get("current_needs") or [])
+        time_constraints = self._dedupe_rules(merged_payload.get("time_constraints") or [])
+        task_like_short_term = bool(current_needs or time_constraints)
+
+        if task_like_short_term:
+            sanitized["current_needs"] = current_needs[:1]
+            sanitized["time_constraints"] = time_constraints[:1]
+            sanitized["priority_order"] = [fixed_low_priority_notice]
+            sanitized["soft_preferences"] = []
+            sanitized["stable_user_preferences"] = []
+            sanitized["forbidden_items"] = []
+            sanitized["decision_rules"] = []
+            sanitized["evidence_snippets"] = []
+            return sanitized
+
+        sanitized["soft_preferences"] = self._dedupe_rules(kept_soft_preferences)
+        sanitized["decision_rules"] = self._dedupe_rules(kept_decision_rules)
+        return sanitized
 
     def _build_rule_memory_payload(
         self,
@@ -794,15 +1016,30 @@ class BaseVLMPlanner:
         hard_preferences: List[str] = []
         soft_preferences: List[str] = []
         current_needs: List[str] = []
+        time_constraints: List[str] = []
         forbidden_items: List[str] = []
         decision_rules: List[str] = []
         stable_user_preferences: List[str] = []
+        priority_order: List[str] = []
+        evidence_snippets: List[str] = []
+
+        def add_evidence_from_markers(markers: List[str], limit: int = 2) -> None:
+            extracted = self._extract_relevant_source_lines(
+                source_text,
+                markers=markers,
+                limit=limit,
+            )
+            for line in extracted:
+                if line not in evidence_snippets:
+                    evidence_snippets.append(line)
 
         if any(token in lowered for token in ["strictly sugar-free", "sugar-free", "sugar free", "no sugar", "无糖", "控糖"]):
             hard_preferences.append("Default to sugar-free drink options for this user.")
             forbidden_items.append("Do not offer sugary drinks.")
             stable_user_preferences.append("Default to sugar-free drink options for this user.")
             decision_rules.append("Enforce the sugar-free constraint before optimizing for stimulation, convenience, or taste.")
+            priority_order.append("Priority: sugar-free constraint before temporary drink-selection needs.")
+            add_evidence_from_markers(["strictly sugar-free", "sugar-free", "sugar free", "no sugar", "无糖", "控糖"])
 
         if any(token in lowered for token in ["allergic", "allergy", "过敏"]):
             extracted = self._extract_relevant_source_lines(
@@ -815,10 +1052,37 @@ class BaseVLMPlanner:
                 hard_preferences.append(normalized)
                 stable_user_preferences.append(normalized)
             decision_rules.append("Treat allergy and safety restrictions as hard constraints.")
+            priority_order.append("Priority: allergy and safety restrictions before all convenience preferences.")
+            add_evidence_from_markers(["allergic", "allergy", "过敏", "anaphyl", "坚果"])
 
         if any(token in lowered for token in ["vegan", "vegetarian", "纯素", "素食"]):
             hard_preferences.append("Respect the user's dietary restriction when choosing food or drinks.")
             stable_user_preferences.append("Respect the user's dietary restriction when choosing food or drinks.")
+            priority_order.append("Priority: dietary restriction before temporary food preference.")
+            add_evidence_from_markers(["vegan", "vegetarian", "纯素", "素食"])
+
+        if any(token in lowered for token in ["avoid caffeine", "no caffeine", "不想摄入咖啡因", "避免咖啡因", "不要咖啡因"]):
+            hard_preferences.append("Avoid caffeinated drinks when choosing beverages for this user.")
+            stable_user_preferences.append("Avoid caffeinated drinks when choosing beverages for this user.")
+            decision_rules.append("Treat caffeine avoidance as a durable drink-selection constraint.")
+            priority_order.append("Priority: caffeine avoidance before stimulation needs.")
+            add_evidence_from_markers(["avoid caffeine", "no caffeine", "不想摄入咖啡因", "避免咖啡因", "不要咖啡因"])
+
+        if any(token in lowered for token in ["afraid of heights", "恐高", "high-floor", "高层", "stairs", "楼梯", "noise", "吵", "loud", "噪音", "安全优先", "safety first"]):
+            extracted = self._extract_relevant_source_lines(
+                source_text,
+                markers=["afraid of heights", "恐高", "high-floor", "高层", "stairs", "楼梯", "noise", "吵", "loud", "噪音", "安全优先", "safety first"],
+                limit=3,
+            )
+            for line in extracted:
+                normalized = self._normalize_rule_sentence(line)
+                if normalized and normalized not in hard_preferences and normalized not in soft_preferences:
+                    hard_preferences.append(normalized)
+                if normalized and normalized not in stable_user_preferences and self._looks_like_stable_preference(line):
+                    stable_user_preferences.append(normalized)
+            if extracted:
+                priority_order.append("Priority: durable safety and avoidance constraints before convenience.")
+                evidence_snippets.extend([line for line in extracted if line not in evidence_snippets])
 
         if any(token in lowered for token in ["不要", "不喜欢", "prefer", "preference", "偏好", "default"]):
             extracted = self._extract_relevant_source_lines(
@@ -832,10 +1096,35 @@ class BaseVLMPlanner:
                     stable_user_preferences.append(normalized)
                 if normalized not in soft_preferences and normalized not in hard_preferences:
                     soft_preferences.append(normalized)
+            evidence_snippets.extend([line for line in extracted if line not in evidence_snippets])
 
-        if any(token in lowered for token in ["sleepy", "stay awake", "tired", "caffeine", "熬夜", "很困", "提神", "困"]):
+        if any(token in lowered for token in ["sleepy", "stay awake", "tired", "熬夜", "很困", "提神", "困"]):
             current_needs.append("The current task favors a drink that helps the user stay awake.")
-            decision_rules.append("After satisfying hard constraints, prefer an allowed drink that better matches the current need for stimulation.")
+            if level == "short_term":
+                decision_rules.append(
+                    "Treat stimulation as a temporary need only within the boundary of durable user preferences and hard constraints."
+                )
+                decision_rules.append(
+                    "Never override durable user preferences, dietary restrictions, or safety constraints with a short-term convenience need."
+                )
+            else:
+                decision_rules.append(
+                    "After satisfying hard constraints, prefer an allowed drink that better matches the current need for stimulation."
+                )
+            add_evidence_from_markers(["sleepy", "stay awake", "tired", "熬夜", "很困", "提神", "困"])
+
+        if any(token in lowered for token in ["今晚", "下午", "明天", "before", "by ", "九点前", "早上", "今晚前", "right now", "马上", "尽快", "等会", "稍后"]):
+            extracted = self._extract_relevant_source_lines(
+                source_text,
+                markers=["今晚", "下午", "明天", "before", "by ", "九点前", "早上", "今晚前", "right now", "马上", "尽快", "等会", "稍后"],
+                limit=3,
+            )
+            for line in extracted:
+                normalized = self._normalize_rule_sentence(line)
+                if normalized and normalized not in time_constraints:
+                    time_constraints.append(normalized)
+                if normalized and normalized not in evidence_snippets:
+                    evidence_snippets.append(normalized)
 
         if any(token in lowered for token in ["water", "白水", "矿泉水"]):
             soft_preferences.append("If no stimulating drink is allowed, water remains a safe fallback option.")
@@ -843,8 +1132,21 @@ class BaseVLMPlanner:
         hard_preferences = self._dedupe_rules(hard_preferences)
         soft_preferences = self._dedupe_rules(soft_preferences)
         current_needs = self._dedupe_rules(current_needs)
+        time_constraints = self._dedupe_rules(time_constraints)
         forbidden_items = self._dedupe_rules(forbidden_items)
         stable_user_preferences = self._dedupe_rules(stable_user_preferences)
+        priority_order = self._dedupe_rules(priority_order)
+        evidence_snippets = self._dedupe_rules(evidence_snippets)
+
+        if level == "short_term":
+            decision_rules.insert(
+                0,
+                "Apply temporary needs only after preserving durable user preferences and hard constraints."
+            )
+            if not priority_order:
+                priority_order.append("Priority: hard constraints > current need > soft preferences.")
+        elif not priority_order:
+            priority_order.append("Priority: stable hard constraints before temporary convenience or soft preference.")
 
         if not decision_rules:
             decision_rules.append("Preserve durable user preferences and hard constraints ahead of transient convenience.")
@@ -861,9 +1163,12 @@ class BaseVLMPlanner:
             "hard_preferences": hard_preferences,
             "soft_preferences": soft_preferences,
             "current_needs": current_needs,
+            "time_constraints": time_constraints,
             "forbidden_items": forbidden_items,
             "decision_rules": decision_rules,
             "stable_user_preferences": stable_user_preferences,
+            "priority_order": priority_order,
+            "evidence_snippets": evidence_snippets,
         }
         payload["summary"] = self._render_rule_memory_summary(payload)
         return payload
@@ -873,10 +1178,13 @@ class BaseVLMPlanner:
         section_map = [
             ("Stable user preferences", payload.get("stable_user_preferences", [])),
             ("Hard constraints", payload.get("hard_preferences", [])),
+            ("Time constraints", payload.get("time_constraints", [])),
             ("Current needs", payload.get("current_needs", [])),
             ("Forbidden items", payload.get("forbidden_items", [])),
+            ("Priority order", payload.get("priority_order", [])),
             ("Decision rules", payload.get("decision_rules", [])),
             ("Soft preferences", payload.get("soft_preferences", [])),
+            ("Evidence", payload.get("evidence_snippets", [])),
         ]
         for title, items in section_map:
             clean_items = [str(item).strip() for item in items if str(item).strip()]
