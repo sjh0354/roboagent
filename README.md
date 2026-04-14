@@ -110,6 +110,62 @@ python planner/arm_planner_vlm.py \
   --lark-target 'group:oc_xxx'
 ```
 
+### Arm Actuation Backend (PI0 / AnyGrasp)
+
+UR5e real-mode `act` actions support backend switching:
+
+```bash
+# default (existing path)
+export ARM_ACT_BACKEND=pi0
+
+# switch to AnyGrasp pipeline
+export ARM_ACT_BACKEND=anygrasp
+export ANYGRASP_RUNNER_CMD='python /media/user/B29202FA9202C2B91/RAS_interactive_planner/utils/anygrasp_runner.py'
+export ANYGRASP_RUNNER_TIMEOUT=240
+```
+
+When `ARM_ACT_BACKEND=anygrasp`, executor calls:
+
+```bash
+$ANYGRASP_RUNNER_CMD --request-json '<JSON_PAYLOAD>'
+```
+
+The runner should print one JSON object on the last stdout line:
+
+```json
+{
+  "success": true,
+  "feedback": "Picked mineral_water and placed on counter",
+  "error": null,
+  "data": {
+    "grasp_pose": [0.1, 0.2, 0.3, 0.0, 1.57, 0.0],
+    "score": 0.92
+  }
+}
+```
+
+Request payload contains:
+- `action`, `item_name`, `source`, `target`, `instruction`
+- `observation_image` (pre-action snapshot path when available)
+- `timestamp`
+
+You can start from:
+- `utils/anygrasp_runner_template.py`
+
+Recommended AnyGrasp runtime env:
+
+```bash
+export ANYGRASP_SDK_ROOT='/abs/path/to/anygrasp_sdk'
+export ANYGRASP_CHECKPOINT_PATH='/abs/path/to/checkpoint.tar'
+export ANYGRASP_DEPTH_PATH='/abs/path/to/depth.png'  # or .npy
+export ANYGRASP_INTRINSICS_JSON='{"fx":927.17,"fy":927.37,"cx":651.32,"cy":349.62,"scale":1000.0}'
+export ANYGRASP_LIMS_JSON='[-0.19,0.12,0.02,0.15,0.0,1.0]'
+
+# optional: plug in your actual UR execution script
+export UR_GRASP_EXECUTOR_CMD='python /media/user/B29202FA9202C2B91/RAS_interactive_planner/utils/ur_grasp_executor_template.py'
+export ANYGRASP_REQUIRE_UR_EXECUTION=1
+```
+
 ## Interaction Transports
 
 The planner input/output path is now transport-based instead of being tied only

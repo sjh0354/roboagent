@@ -9,6 +9,8 @@ import os
 import time
 import subprocess
 import glob
+import json
+import shlex
 from typing import Dict, Any
 from executor.arm_executor import ArmExecutor, ExecutionResult
 from executor.vision_enabled_mixin import VisionEnabledMixin
@@ -58,6 +60,7 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
 
         if enable_vision:
             self._initialize_vision_components()
+        self.act_backend = os.getenv("ARM_ACT_BACKEND", "pi0").strip().lower()
 
     def execute_action(self, action_type: str, action_name: str, parameters: Dict[str, Any]) -> ExecutionResult:
         """
@@ -69,27 +72,30 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
         3. Return enhanced ExecutionResult
         """
         
-        # Intercept 'act' actions for real hardware execution using PI0 script
+        # Intercept 'act' actions for real hardware execution using selected backend
         if not self.simulation_mode and action_type == "act":
-            instruction = ""
-            if action_name == "pick_and_place":
-                item_name = parameters.get("item_name", "item")
-                source = parameters.get("source", "shelf")
-                target = parameters.get("target", "counter")
-                # instruction = f"Move the {item_name} into the {target}."
-                instruction = f"pick up the {item_name} and place into {target}."
-            elif action_name == "pick_from_shelf":
-                 item_name = parameters.get("item_name", "item")
-                 instruction = f"Pick the {item_name} from the shelf."
-            elif action_name == "place_on_counter":
-                 item_name = parameters.get("item_name", "item")
-                 instruction = f"Place the {item_name} on the counter."
-            
-            if instruction:
-                base_result = self._execute_pi0_script(instruction)
+            if self.act_backend == "anygrasp":
+                base_result = self._execute_anygrasp_action(action_name, parameters)
             else:
-                # Fallback to base execution if action unknown or no instruction
-                base_result = super().execute_action(action_type, action_name, parameters)
+                instruction = ""
+                if action_name == "pick_and_place":
+                    item_name = parameters.get("item_name", "item")
+                    source = parameters.get("source", "shelf")
+                    target = parameters.get("target", "counter")
+                    # instruction = f"Move the {item_name} into the {target}."
+                    instruction = f"pick up the {item_name} and place into {target}."
+                elif action_name == "pick_from_shelf":
+                     item_name = parameters.get("item_name", "item")
+                     instruction = f"Pick the {item_name} from the shelf."
+                elif action_name == "place_on_counter":
+                     item_name = parameters.get("item_name", "item")
+                     instruction = f"Place the {item_name} on the counter."
+                
+                if instruction:
+                    base_result = self._execute_pi0_script(instruction)
+                else:
+                    # Fallback to base execution if action unknown or no instruction
+                    base_result = super().execute_action(action_type, action_name, parameters)
         else:
             # Execute using base executor for simulation or non-act actions
             base_result = super().execute_action(action_type, action_name, parameters)
@@ -231,6 +237,140 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
             # Keeping it running is faster for subsequent commands. 
             # If we want to strictly stop it:
             # subprocess.run(["make", "kill"], cwd=docker_dir, check=False)
+
+    def _execute_anygrasp_action(self, action_name: str, parameters: Dict[str, Any]) -> ExecutionResult:
+        if action_name != "pick_and_place":
+            return super().execute_action("act", action_name, parameters)
+
+        item_name = parameters.get("item_name", "item")
+        source = parameters.get("source", "shelf")
+        target = parameters.get("target", "counter")
+        instruction = f"pick up the {item_name} from {source} and place into {target}."
+
+        request_payload = {
+            "action": "pick_and_place",
+            "item_name": item_name,
+            "source": source,
+            "target": target,
+            "instruction": instruction,
+            "observation_image": self._capture_pre_action_observation(),
+            "timestamp": time.time(),
+        }
+
+        return self._execute_anygrasp_runner(request_payload)
+
+    def _capture_pre_action_observation(self) -> str:
+        try:
+            snapshot = self._capture_observation_snapshot(include_vlm_description=False)
+            if isinstance(snapshot, dict):
+                return snapshot.get("image_path") or ""
+        except Exception:
+            pass
+        return ""
+
+    def _execute_anygrasp_runner(self, request_payload: Dict[str, Any]) -> ExecutionResult:
+        runner_cmd = os.getenv("ANYGRASP_RUNNER_CMD", "").strip()
+        if not runner_cmd:
+            default_runner = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "utils",
+                "anygrasp_runner.py",
+            )
+            if os.path.exists(default_runner):
+                runner_cmd = f"python {default_runner}"
+        if not runner_cmd:
+            return ExecutionResult(
+                success=False,
+                feedback="AnyGrasp backend selected but runner command is not configured.",
+                error="missing_ANYGRASP_RUNNER_CMD",
+                data={
+                    "backend": "anygrasp",
+                    "required_env": "ANYGRASP_RUNNER_CMD",
+                    "request_payload": request_payload,
+                },
+            )
+
+        timeout_seconds = int(os.getenv("ANYGRASP_RUNNER_TIMEOUT", "240"))
+        command = shlex.split(runner_cmd) + ["--request-json", json.dumps(request_payload, ensure_ascii=False)]
+        if self.verbose:
+            print("🚀 Launching AnyGrasp backend runner...")
+            print(f"   Command: {' '.join(command)}")
+
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired:
+            return ExecutionResult(
+                success=False,
+                feedback="AnyGrasp runner timed out.",
+                error=f"runner_timeout_{timeout_seconds}s",
+                data={"backend": "anygrasp", "request_payload": request_payload},
+            )
+        except Exception as error:
+            return ExecutionResult(
+                success=False,
+                feedback="Failed to start AnyGrasp runner.",
+                error=str(error),
+                data={"backend": "anygrasp", "request_payload": request_payload},
+            )
+
+        parsed = self._parse_anygrasp_runner_output(completed.stdout)
+        stderr_text = (completed.stderr or "").strip()
+        if completed.returncode != 0:
+            return ExecutionResult(
+                success=False,
+                feedback="AnyGrasp runner returned non-zero exit code.",
+                error=stderr_text or f"runner_exit_{completed.returncode}",
+                data={
+                    "backend": "anygrasp",
+                    "returncode": completed.returncode,
+                    "stdout": (completed.stdout or "").strip(),
+                    "stderr": stderr_text,
+                    "request_payload": request_payload,
+                },
+            )
+
+        if parsed is None:
+            return ExecutionResult(
+                success=True,
+                feedback="AnyGrasp runner completed (no JSON result; treat as success).",
+                data={
+                    "backend": "anygrasp",
+                    "stdout": (completed.stdout or "").strip(),
+                    "request_payload": request_payload,
+                },
+            )
+
+        success = bool(parsed.get("success", True))
+        feedback = str(parsed.get("feedback") or "AnyGrasp runner completed.")
+        error = parsed.get("error")
+        data = parsed.get("data") if isinstance(parsed.get("data"), dict) else {}
+        data = {
+            "backend": "anygrasp",
+            "request_payload": request_payload,
+            **data,
+        }
+        return ExecutionResult(success=success, feedback=feedback, data=data, error=error)
+
+    def _parse_anygrasp_runner_output(self, stdout_text: str):
+        text = (stdout_text or "").strip()
+        if not text:
+            return None
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return None
+        try:
+            parsed = json.loads(lines[-1])
+        except Exception:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+        return None
 
     def _get_latest_pi0_action_steps(self, log_dir: str):
         pattern = os.path.join(log_dir, "pi0_actions_*.log")
