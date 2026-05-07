@@ -54,3 +54,6 @@ experiments/
 
 # Personalized embodied-agent memory overlay
 agent/memory/local/
+
+#Third-party libraries
+third_party/

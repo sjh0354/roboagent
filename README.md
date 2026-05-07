@@ -434,3 +434,30 @@ python -m py_compile \
 - If you want the most recent refactor summary and testing status, see:
 
 `document/REFACTOR_HANDOFF_2026-03-10.md`
+
+
+### Workstation Ops Skill (Runbook)
+
+To avoid repeated trial-and-error across hosts, use:
+
+- `agent/skills/ur5e/workstation_ops_runbook/SKILL.md`
+
+This runbook consolidates:
+- `ras` conda environment constraints
+- host path mapping (`/media` vs `/home`)
+- proxy compatibility handling (`socks://...` issue)
+- three-step verification commands
+- handoff trigger conditions for real hardware execution
+- v2 real-UR safety SOP:
+  - default `UR_ENABLE_MOTION=0`
+  - `full` mode hard-blocked
+  - `motion_only` allowed only in approved window with human watch + E-stop ready
+  - mandatory return fields: `exit code`, last-line JSON, `safety_gate`, key safety logs
+ - RAS state-only bridge:
+   - `utils/ur_state_bridge_client.py`
+   - `utils/ur_state_bridge_container_wrapper.sh`
+   - preflight split gates: `--state-gate` (state visibility), `--motion-gate` (control readiness)
+- RTDE occupancy cleanup rule:
+  - clear residual `ur5e`/`ur_rtde` processes before each window
+  - enforce single-chain startup (no concurrent control sessions)
+  - require `30004 open` + `/ur5e_robot` + `/arm_1/arm_joint_states` before execution

@@ -67,6 +67,94 @@ def _response(success: bool, feedback: str, error: Optional[str] = None, data: O
     }
 
 
+def _valid_joint_state(value: Any) -> bool:
+    if not isinstance(value, list) or len(value) < 6:
+        return False
+    try:
+        for idx in range(6):
+            number = float(value[idx])
+            if not np.isfinite(number):
+                return False
+    except Exception:
+        return False
+    return True
+
+
+def _maybe_inject_joint_state(request: Dict[str, Any]) -> Dict[str, Any]:
+    info: Dict[str, Any] = {
+        "enabled": _bool_env("ANYGRASP_AUTO_INJECT_JOINT_STATE", False),
+        "injected": False,
+        "reason": "disabled",
+        "bridge_cmd": None,
+        "bridge_returncode": None,
+        "bridge_stdout": "",
+        "bridge_stderr": "",
+    }
+    if not info["enabled"]:
+        return info
+    if _valid_joint_state(request.get("joint_state")):
+        info["reason"] = "request_already_has_joint_state"
+        return info
+
+    cmd_text = os.getenv(
+        "ANYGRASP_STATE_BRIDGE_CMD",
+        "/home/ef/projects/RAS_interactivate_planner/utils/ur_state_bridge_container_wrapper.sh "
+        "--arm-name arm_1 --joint-state-topic /arm_1/arm_joint_states --timeout-sec 3",
+    ).strip()
+    info["bridge_cmd"] = cmd_text
+    if not cmd_text:
+        info["reason"] = "bridge_cmd_empty"
+        return info
+
+    timeout_sec = int(os.getenv("ANYGRASP_STATE_BRIDGE_TIMEOUT", "20"))
+    try:
+        completed = subprocess.run(
+            shlex.split(cmd_text),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+    except Exception as error:
+        info["reason"] = f"bridge_run_exception: {error}"
+        return info
+
+    stdout = (completed.stdout or "").strip()
+    stderr = (completed.stderr or "").strip()
+    info["bridge_returncode"] = completed.returncode
+    info["bridge_stdout"] = stdout
+    info["bridge_stderr"] = stderr
+
+    if completed.returncode != 0:
+        info["reason"] = "bridge_nonzero_exit"
+        return info
+
+    parsed = None
+    if stdout:
+        lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+        if lines:
+            try:
+                parsed = json.loads(lines[-1])
+            except Exception:
+                parsed = None
+    if not isinstance(parsed, dict):
+        info["reason"] = "bridge_json_parse_failed"
+        return info
+    if not parsed.get("success"):
+        info["reason"] = f"bridge_result_unsuccessful: {parsed.get('error') or 'unknown'}"
+        return info
+
+    joint_state = (((parsed.get("data") or {}).get("observation") or {}).get("joint_state"))
+    if not _valid_joint_state(joint_state):
+        info["reason"] = "bridge_joint_state_invalid"
+        return info
+
+    request["joint_state"] = [float(joint_state[i]) for i in range(6)]
+    info["injected"] = True
+    info["reason"] = "injected_from_state_bridge"
+    return info
+
+
 def _load_depth(depth_path: str) -> np.ndarray:
     if depth_path.endswith(".npy"):
         depth = np.load(depth_path)
@@ -220,6 +308,39 @@ def _run_ur_executor(request: Dict[str, Any], grasp_result: Dict[str, Any]) -> D
             raise RuntimeError("UR_GRASP_EXECUTOR_CMD is required for real pick-and-place execution.")
         return {"executed": False, "note": "No UR executor configured; detection-only mode."}
 
+    gate_cmd_text = os.getenv(
+        "UR_MOTION_GATE_CMD",
+        "bash /home/ef/projects/RAS_interactivate_planner/scripts/ur_rtde_preflight.sh --check-only --motion-gate",
+    ).strip()
+    if gate_cmd_text:
+        gate_completed = subprocess.run(
+            shlex.split(gate_cmd_text),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=int(os.getenv("UR_MOTION_GATE_TIMEOUT", "30")),
+        )
+        gate_stdout = (gate_completed.stdout or "").strip()
+        gate_stderr = (gate_completed.stderr or "").strip()
+        if gate_completed.returncode != 0:
+            return {
+                "executed": False,
+                "executor_ok": False,
+                "executor_returncode": gate_completed.returncode,
+                "executor_stdout": "",
+                "executor_stderr": "",
+                "executor_result": None,
+                "safety_gate": None,
+                "executor_error": "motion_gate_failed",
+                "motion_gate": {
+                    "ok": False,
+                    "command": gate_cmd_text,
+                    "returncode": gate_completed.returncode,
+                    "stdout": gate_stdout,
+                    "stderr": gate_stderr,
+                },
+            }
+
     command = shlex.split(cmd_text) + [
         "--request-json",
         json.dumps(request, ensure_ascii=False),
@@ -239,19 +360,30 @@ def _run_ur_executor(request: Dict[str, Any], grasp_result: Dict[str, Any]) -> D
             except Exception:
                 parsed = None
 
-    if completed.returncode != 0:
-        raise RuntimeError(stderr or f"UR executor failed with exit code {completed.returncode}")
+    safety_gate = None
+    if isinstance(parsed, dict):
+        safety_gate = ((parsed.get("data") or {}).get("safety_gate"))
 
     return {
         "executed": True,
+        "executor_ok": completed.returncode == 0,
         "executor_returncode": completed.returncode,
         "executor_stdout": stdout,
         "executor_stderr": stderr,
         "executor_result": parsed if isinstance(parsed, dict) else None,
+        "safety_gate": safety_gate,
+        "executor_error": None if completed.returncode == 0 else (stderr or f"UR executor failed with exit code {completed.returncode}"),
+        "motion_gate": {
+            "ok": True,
+            "command": gate_cmd_text,
+            "returncode": 0,
+        },
     }
 
 
 def run(request: Dict[str, Any]) -> Dict[str, Any]:
+    state_injection = _maybe_inject_joint_state(request)
+    request["_state_injection"] = state_injection
     intrinsics = _json_env(
         "ANYGRASP_INTRINSICS_JSON",
         {"fx": 927.17, "fy": 927.37, "cx": 651.32, "cy": 349.62, "scale": 1000.0, "z_min": 0.0, "z_max": 1.5},
@@ -262,10 +394,24 @@ def run(request: Dict[str, Any]) -> Dict[str, Any]:
 
     grasp_result = _pick_best_grasp(request, intrinsics=intrinsics, lims=lims)
     execution_result = _run_ur_executor(request, grasp_result)
+    if not execution_result.get("executor_ok", True) and _bool_env("ANYGRASP_REQUIRE_UR_EXECUTION", True):
+        return _response(
+            success=False,
+            feedback="AnyGrasp execution failed at UR executor stage.",
+            error=execution_result.get("executor_error") or "ur_executor_failed",
+            data={
+                "backend": "anygrasp",
+                "request": request,
+                "state_injection": state_injection,
+                **grasp_result,
+                "execution": execution_result,
+            },
+        )
 
     data = {
         "backend": "anygrasp",
         "request": request,
+        "state_injection": state_injection,
         **grasp_result,
         "execution": execution_result,
     }
@@ -293,11 +439,16 @@ def main() -> int:
     try:
         result = run(request)
     except Exception as error:
+        state_injection = request.get("_state_injection")
         result = _response(
             success=False,
             feedback="AnyGrasp execution failed.",
             error=str(error),
-            data={"backend": "anygrasp", "request": request},
+            data={
+                "backend": "anygrasp",
+                "request": request,
+                "state_injection": state_injection if isinstance(state_injection, dict) else None,
+            },
         )
 
     print(json.dumps(result, ensure_ascii=False))

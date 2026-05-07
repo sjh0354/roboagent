@@ -1,0 +1,8 @@
+{
+  "width": 640,
+  "height": 480,
+  "dtype": "uint16",
+  "min": 0,
+  "max": 65535,
+  "nonzero": 272445
+}
