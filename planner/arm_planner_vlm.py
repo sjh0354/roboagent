@@ -35,8 +35,8 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
 
     Key features:
     - VLM planner receives images directly (not text descriptions)
-    - Autonomous execution loop without feedback waiting (half-open-loop)
-    - All actions assumed successful
+    - Autonomous execution loop without interactive feedback waiting (half-open-loop)
+    - Executor failures stop the loop instead of being treated as completed actions
     - Humanoid interaction only for: task responses, clarifications, status updates
     """
 
@@ -47,7 +47,8 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
                  verbose: bool = True,
                  volume: float = 1.0,
                  voice: str = "male",
-                 transport: Optional[MessageTransport] = None):
+                 transport: Optional[MessageTransport] = None,
+                 control_method: Optional[str] = None):
         """
         Initialize VLM-based autonomous arm planner
 
@@ -62,6 +63,8 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         self.verbose = verbose
         self.simulation_mode = simulation_mode
         self.transport = transport
+        self.task_failed = False
+        self.task_error = None
         super().__init__(
             profile_name="ur5e",
             api_key=api_key,
@@ -81,7 +84,8 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             enable_vision=True,
             vlm_model=model_name,
             volume=volume,
-            voice=voice
+            voice=voice,
+            act_backend=control_method,
         )
         self.executor.set_message_transport(self.transport)
         self.reset_conversation()
@@ -93,10 +97,14 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
 
     def reset_conversation(self):
         super().reset_conversation()
+        self.vla_retry_count = 0
 
     def _reset_runtime_state(self):
         self.waiting_for_humanoid = False
         self.humanoid_question = None
+        self.pending_retry_context = None
+        self.task_failed = False
+        self.task_error = None
 
     def start_new_task(self, request: str, run_autonomously: bool = True,
                       observation_image: Optional[str] = None) -> Dict:
@@ -110,7 +118,7 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             print("="*70)
             print(f"📝 Request: {request}")
             print(f"🕐 Started at: {self.task_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"⚙️  Mode: All actions assumed successful")
+            print(f"⚙️  Mode: Half-open-loop; executor failures stop the task")
             print("="*70 + "\n")
 
     def _get_default_observation_image(self) -> str:
@@ -171,15 +179,25 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         if "error" in step_plan or step_plan.get("next_step") is None:
             return
 
-        next_step = step_plan["next_step"]
+        next_step = dict(step_plan["next_step"])
+        parameters = dict(next_step.get("parameters") or {})
+        policy_adjustment = self._apply_real_trajectory_policy(next_step, parameters)
+        if policy_adjustment == "complete":
+            self.is_task_complete = True
+            if self.verbose:
+                print("\n🧭 Real trajectory policy: supported cleanup trajectories are already complete.")
+            return
 
         # Record in execution history
-        self.execution_history.append({
+        history_entry = {
             "step_number": next_step.get("step_number"),
             "action": next_step.get("action"),
-            "parameters": next_step.get("parameters"),
+            "parameters": parameters,
             "timestamp": datetime.now().isoformat()
-        })
+        }
+        if policy_adjustment:
+            history_entry["policy_adjustment"] = policy_adjustment
+        self.execution_history.append(history_entry)
 
         self.step_count += 1
 
@@ -188,7 +206,9 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             print(f"⚡ EXECUTING STEP {next_step.get('step_number')} (Real Hardware)")
             print("="*70)
             print(f"🎯 Action: {next_step.get('action')}")
-            print(f"📦 Parameters: {json.dumps(next_step.get('parameters', {}), indent=2)}")
+            print(f"📦 Parameters: {json.dumps(parameters, indent=2)}")
+            if policy_adjustment:
+                print(f"🧭 Policy adjustment: {policy_adjustment}")
             print("="*70 + "\n")
 
         step_started_at = time.time()
@@ -196,7 +216,7 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         result = self.executor.execute_action(
             next_step.get("action_type"),
             next_step.get("action"),
-            next_step.get("parameters", {})
+            parameters
         )
         step_finished_at = time.time()
         
@@ -204,8 +224,7 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         if result.data.get("observation_image"):
              self.current_observation_image = result.data.get("observation_image")
 
-        # Mark as assumed successful (half-open loop)
-        self.execution_history[-1]["assumed_successful"] = True
+        self.execution_history[-1]["assumed_successful"] = bool(result.success)
         self.execution_history[-1]["execution_result"] = result.to_dict()
         self.execution_history[-1]["duration_seconds"] = round(step_finished_at - step_started_at, 2)
         self.transient_memory_packet = self._build_transient_memory_packet(
@@ -215,6 +234,37 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             primary_image=result.data.get("observation_image") or self.current_observation_image,
         )
 
+        if not result.success and self._should_retry_failed_vla_action(next_step, result):
+            self.vla_retry_count += 1
+            self.pending_retry_context = self._build_retry_context(next_step, result)
+            if self.verbose:
+                print(f"\n{'='*70}")
+                print("📊 EXECUTION STATUS:")
+                print(f"{'='*70}")
+                print("✗ Action failed, but retry is allowed.")
+                print(f"Retry budget: {self.vla_retry_count}/{self._max_vla_retries()}")
+                print(f"Error: {result.error}")
+                print("→ Replanning with transient visual memory...")
+                print(f"{'='*70}\n")
+            return
+
+        if not result.success:
+            self.is_task_complete = True
+            self.task_failed = True
+            self.task_error = result.error or result.feedback or "Arm action failed"
+            if self.verbose:
+                print(f"\n{'='*70}")
+                print("📊 EXECUTION STATUS:")
+                print(f"{'='*70}")
+                print("✗ Action failed on hardware; stopping autonomous loop.")
+                print(f"Error: {result.error}")
+                print(f"{'='*70}\n")
+            return
+
+        self.pending_retry_context = None
+        if (result.data or {}).get("backend") in {"vla", "pi0"}:
+            self.vla_retry_count = 0
+
         if self.verbose:
             print(f"\n{'='*70}")
             print(f"📊 EXECUTION STATUS:")
@@ -222,6 +272,115 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             print(f"✓ Action executed on hardware")
             print(f"→ Continuing to next step...")
             print(f"{'='*70}\n")
+
+    def _max_vla_retries(self) -> int:
+        return max(0, int(os.getenv("ARM_VLA_MAX_RETRIES", "1")))
+
+    def _should_retry_failed_vla_action(self, next_step: Dict, result) -> bool:
+        if self.simulation_mode:
+            return False
+        if next_step.get("action_type") != "act":
+            return False
+        data = result.data or {}
+        backend = str(data.get("backend") or "").lower()
+        if backend not in {"vla", "pi0"}:
+            return False
+        if not data.get("retryable"):
+            return False
+        return self.vla_retry_count < self._max_vla_retries()
+
+    def _build_retry_context(self, next_step: Dict, result) -> Dict:
+        data = result.data or {}
+        return {
+            "failed_action": next_step.get("action"),
+            "failed_parameters": next_step.get("parameters") or {},
+            "error": result.error,
+            "feedback": result.feedback,
+            "failure_kind": data.get("failure_kind"),
+            "pi0_steps": data.get("pi0_steps"),
+            "retry_count": self.vla_retry_count,
+            "max_retries": self._max_vla_retries(),
+        }
+
+    def _apply_real_trajectory_policy(self, next_step: Dict, parameters: Dict) -> Optional[str]:
+        """Constrain desk-cleaning real execution to the recorded replay trajectories."""
+        if not self._uses_recorded_trajectory_backend():
+            return None
+        if next_step.get("action_type") != "act" or next_step.get("action") != "pick_and_place":
+            return None
+        if not self._is_reading_desk_cleanup_request():
+            return None
+
+        planned_text = " ".join(
+            str(parameters.get(key, ""))
+            for key in ("item_name", "instruction", "task_description", "description")
+        )
+        planned_item = self._trajectory_item_from_text(planned_text)
+        completed_items = self._completed_recorded_cleanup_items()
+        remaining_items = [item for item in ("water", "medicine") if item not in completed_items]
+
+        if planned_item in {"water", "medicine"}:
+            before = dict(parameters)
+            parameters["item_name"] = planned_item
+            parameters["source"] = parameters.get("source") or "tray"
+            parameters["target"] = "basket"
+            if parameters != before:
+                return f"normalized supported cleanup item to {planned_item} -> basket"
+            return None
+
+        if remaining_items:
+            replacement_item = remaining_items[0]
+            original_item = parameters.get("item_name", "unknown")
+            parameters.clear()
+            parameters.update({
+                "item_name": replacement_item,
+                "source": "tray",
+                "target": "basket",
+            })
+            next_step["action_type"] = "act"
+            next_step["action"] = "pick_and_place"
+            return (
+                f"replaced unsupported cleanup item '{original_item}' "
+                f"with recorded trajectory {replacement_item} -> basket"
+            )
+
+        return "complete"
+
+    def _uses_recorded_trajectory_backend(self) -> bool:
+        executor = getattr(self, "executor", None)
+        if executor and hasattr(executor, "_select_backend_for_action"):
+            backend = executor._select_backend_for_action(quiet=True)
+        else:
+            backend = getattr(executor, "act_backend", "")
+        return str(backend).strip().lower() in {"trajectory_replay", "trajectory", "replay"}
+
+    def _is_reading_desk_cleanup_request(self) -> bool:
+        request = (self.original_request or "").lower()
+        cleanup_terms = ("clean", "clear", "tidy", "organize", "整理", "清理", "收拾")
+        reading_terms = ("read", "book", "desk", "table", "看书", "读书", "桌")
+        return any(term in request for term in cleanup_terms) and any(term in request for term in reading_terms)
+
+    def _trajectory_item_from_text(self, text: str) -> Optional[str]:
+        lowered = text.lower().replace("_", " ")
+        if "water" in lowered or "mineral" in lowered:
+            return "water"
+        medicine_terms = ("medicine", "medication", "pill", "drug", "green box")
+        if any(term in lowered for term in medicine_terms):
+            return "medicine"
+        return None
+
+    def _completed_recorded_cleanup_items(self) -> set:
+        completed = set()
+        for exec_step in self.execution_history:
+            if not exec_step.get("assumed_successful"):
+                continue
+            params = exec_step.get("parameters") or {}
+            item = self._trajectory_item_from_text(
+                " ".join(str(params.get(key, "")) for key in ("item_name", "instruction", "task_description"))
+            )
+            if item:
+                completed.add(item)
+        return completed
 
     def _execute_step_simulation(self, step_plan: Dict):
         """
@@ -342,6 +501,31 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         if transient_memory_context:
             context_parts.append(f"\n{transient_memory_context}")
 
+        if self.pending_retry_context:
+            retry_context = json.dumps(
+                self.pending_retry_context,
+                ensure_ascii=False,
+                indent=2,
+            )
+            context_parts.append(
+                "\n[RETRYABLE PI0/VLA FAILURE]: The previous physical action did not "
+                "complete successfully. Use the ordered transient visual memory frames "
+                "above to decide whether the arm is stuck, made no progress, or needs "
+                "the same skill called again with clearer parameters. Retry only if the "
+                "object and destination are still valid.\n"
+                f"{retry_context}"
+            )
+
+        if self._uses_recorded_trajectory_backend() and self._is_reading_desk_cleanup_request():
+            completed_items = self._completed_recorded_cleanup_items()
+            remaining_items = [item for item in ("water", "medicine") if item not in completed_items]
+            context_parts.append(
+                "\n[REAL TRAJECTORY POLICY]: This real robot can only replay recorded cleanup "
+                "trajectories for water and medicine. For this reading/desk-cleaning task, "
+                "move remaining supported clutter to basket in this order: "
+                f"{remaining_items or 'none'}. Never plan tray, book, notebook, paper, or counter moves."
+            )
+
         # Instruction
         context_parts.append(
             "\n[INSTRUCTION]: Based on the visual observation (image(s) provided above) and execution history, "
@@ -424,6 +608,12 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
     def _get_response_prefix(self) -> str:
         return "HUMANOID RESPONSE"
 
+    def _get_summary_extras(self) -> Dict:
+        return {
+            "success": not self.task_failed,
+            "error": self.task_error,
+        }
+
     def _get_transient_memory_frames(self, start_ts: float, end_ts: float):
         if hasattr(self.executor, "get_buffered_observations_between"):
             return self.executor.get_buffered_observations_between(start_ts, end_ts, max_frames=6)
@@ -453,6 +643,12 @@ def main():
     )
     parser.add_argument("--lark-target", default=os.getenv("LARK_TARGET") or os.getenv("OPENCLAW_LARK_TARGET"), help="Lark/Feishu target chat id")
     parser.add_argument("--lark-account", default=os.getenv("LARK_ACCOUNT_ID") or os.getenv("OPENCLAW_LARK_ACCOUNT"), help="Lark bot account id")
+    parser.add_argument(
+        "--control-method",
+        choices=["vla", "pi0", "replay", "trajectory_replay", "anygrasp"],
+        default=os.getenv("ARM_CONTROL_METHOD") or os.getenv("ARM_ACT_BACKEND") or "vla",
+        help="Real arm control backend. Default: vla/pi0; if its policy port is unavailable, fallback to replay.",
+    )
     args = parser.parse_args()
     verbose = args.log
     simulation_mode = args.simulation
@@ -482,6 +678,7 @@ def main():
             simulation_mode=simulation_mode,
             verbose=verbose,
             transport=transport,
+            control_method=args.control_method,
         )
 
         print("\n" + "="*70)
@@ -489,6 +686,7 @@ def main():
         print("="*70)
         print("📋 Commands:")
         print(f"  - Mode: {'simulation' if simulation_mode else 'real'}")
+        print(f"  - Control method: {planner.executor.act_backend}")
         print(f"  - Transport: {args.transport}")
         print("  - Speak wake word (e.g. '你好机器人') followed by your request when using voice transport")
         print("  - Type request from humanoid robot directly")
@@ -573,12 +771,12 @@ def main():
                 result = planner.provide_humanoid_response(response)
 
             # Show final result
-            if result.get("is_complete"):
+            if result.get("error") or result.get("success") is False:
+                print(f"\n❌ Task failed: {result.get('error') or 'Unknown error'}")
+            elif result.get("is_complete"):
                 print("\n✅ Task completed successfully!")
                 if not verbose:
                     print(f"   steps: {result.get('steps_executed')}")
-            elif result.get("error"):
-                print(f"\n❌ Error: {result['error']}")
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted. Goodbye!")

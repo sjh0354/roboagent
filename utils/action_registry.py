@@ -28,7 +28,13 @@ ACTION_SCHEMAS: Dict[str, Dict[str, Dict[str, object]]] = {
         "control_light": {
             "action_type": "tool",
             "skill": "control_home_devices",
-            "keywords": ["light", "lights", "lamp", "dark", "bright"],
+            "keywords": ["light", "lights", "lamp", "dark", "bright", "reading", "desk lamp", "background light", "台灯", "背景光", "看书", "阅读"],
+            "follow_up_skills": ["speak_and_report"],
+        },
+        "play_audio": {
+            "action_type": "tool",
+            "skill": "play_audio",
+            "keywords": ["music", "audio", "white noise", "background sound", "rain sound", "noise", "音乐", "白噪音", "背景音"],
             "follow_up_skills": ["speak_and_report"],
         },
         "web_search": {

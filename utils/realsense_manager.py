@@ -95,12 +95,13 @@ class RealSenseCameraManager:
             if self.verbose:
                 print(f"❌ Failed to reset device: {e}")
 
-    def capture_image(self, filename=None):
+    def capture_image(self, filename=None, quiet=False):
         """
         Capture a single color frame and save to disk
         
         Args:
             filename: Optional filename (default: timestamped)
+            quiet: If True, suppress successful capture logging
             
         Returns:
             str: Path to saved image file
@@ -136,7 +137,7 @@ class RealSenseCameraManager:
                 # Save image using OpenCV
                 cv2.imwrite(save_path, color_image)
                 
-                if self.verbose:
+                if self.verbose and not quiet:
                     print(f"📸 Image captured: {save_path}")
                     
                 return save_path

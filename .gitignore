@@ -49,8 +49,9 @@ wheels/
 .DS_Store
 Thumbs.db
 
-# Local experiments
-experiments/
+# Local experiment outputs
+experiments/**/outputs/
+experiments/**/golden_traces/
 
 # Personalized embodied-agent memory overlay
 agent/memory/local/

@@ -8,3 +8,4 @@ dashscope
 scipy
 sounddevice
 google-genai
+pytest

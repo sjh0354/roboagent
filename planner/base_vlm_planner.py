@@ -14,7 +14,7 @@ from template.modular_prompt_loader import build_runtime_system_prompt
 from utils.gemini_vlm_client import GeminiVLMClient
 from utils.hierarchical_memory_manager import HierarchicalMemoryManager
 from utils.memory_manager import MemoryManager
-from utils.action_registry import get_action_schema
+from utils.action_registry import get_action_schema, get_action_to_skill
 
 
 class BaseVLMPlanner:
@@ -64,6 +64,9 @@ class BaseVLMPlanner:
         self.hierarchical_memory_manager.configure_runtime(
             context_window_tokens=self.context_window_tokens,
         )
+        self.memory_mode = self._normalize_memory_mode(os.getenv("OMNICLAW_MEMORY_MODE", "full"))
+        self.fixed_memory_step_interval = int(os.getenv("OMNICLAW_FIXED_MEMORY_STEP_INTERVAL", "2"))
+        self.fixed_memory_max_summaries = int(os.getenv("OMNICLAW_FIXED_MEMORY_MAX_SUMMARIES", "4"))
 
     def reset_conversation(self):
         """Reset planner state for a new task."""
@@ -79,6 +82,8 @@ class BaseVLMPlanner:
         self.runtime_memory_session_id = None
         self.runtime_memory_cursor = {"conversation_history": 0, "execution_history": 0}
         self.active_context_last_compaction_at = None
+        self.fixed_memory_summaries = []
+        self.fixed_memory_last_step = 0
         self._reset_runtime_state()
 
     def start_new_task(self, request: str, run_autonomously: bool = True) -> Dict:
@@ -128,6 +133,7 @@ class BaseVLMPlanner:
                 return self._finalize_interaction(step_plan)
 
             self._execute_step(step_plan)
+            self._maybe_record_fixed_frequency_memory()
 
         if self.is_task_complete:
             return self._finalize_interaction(self.get_task_summary())
@@ -234,6 +240,7 @@ class BaseVLMPlanner:
             execution_history=self.execution_history,
             current_location=self._get_current_location_for_prompt(),
             legacy_prompt=self.legacy_system_prompt,
+            include_memory=self.memory_mode != "none",
         )
 
     def _finalize_interaction(self, result: Dict) -> Dict:
@@ -242,14 +249,18 @@ class BaseVLMPlanner:
 
         status = result.get("status")
         if not status:
-            if result.get("is_complete"):
+            if result.get("error") or result.get("success") is False:
+                status = "error"
+            elif result.get("is_complete"):
                 status = "completed"
             elif result.get("needs_human_input"):
                 status = self._get_waiting_status()
-            elif result.get("error"):
-                status = "error"
             else:
                 status = "returned"
+
+        if self.memory_mode == "none":
+            self.memory_recorded = True
+            return result
 
         self.memory_candidates = self.memory_manager.record_interaction(
             status=status,
@@ -395,11 +406,17 @@ class BaseVLMPlanner:
         return {}
 
     def _build_hierarchical_memory_context(self) -> Optional[str]:
+        if self.memory_mode == "none":
+            return None
+        if self.memory_mode == "fixed":
+            return self._build_fixed_frequency_memory_context()
         return self.hierarchical_memory_manager.build_context_block(
             session_id=self.runtime_memory_session_id,
         )
 
     def _maybe_compact_active_context(self) -> None:
+        if self.memory_mode != "full":
+            return
         keep_recent = max(0, self.active_context_keep_recent_messages)
         if len(self.conversation_history) <= keep_recent:
             return
@@ -454,6 +471,8 @@ class BaseVLMPlanner:
             )
 
     def _record_hierarchical_memory(self, status: str, result: Dict) -> Optional[Dict[str, Any]]:
+        if self.memory_mode != "full":
+            return None
         if not self.runtime_memory_session_id:
             self.runtime_memory_session_id = self.hierarchical_memory_manager.start_session()
 
@@ -501,6 +520,70 @@ class BaseVLMPlanner:
             **({"rollup": rollup} if rollup else {}),
         }
 
+    def _normalize_memory_mode(self, mode: str) -> str:
+        normalized = str(mode or "full").strip().lower()
+        aliases = {
+            "off": "none",
+            "without": "none",
+            "without_memory": "none",
+            "w/o": "none",
+            "w/o_memory": "none",
+            "naive": "fixed",
+            "fixed_frequency": "fixed",
+            "fixed-frequency": "fixed",
+        }
+        normalized = aliases.get(normalized, normalized)
+        if normalized not in {"full", "none", "fixed"}:
+            if self.verbose:
+                print(f"⚠️  Unknown OMNICLAW_MEMORY_MODE={mode!r}; falling back to full")
+            return "full"
+        return normalized
+
+    def _maybe_record_fixed_frequency_memory(self) -> None:
+        if self.memory_mode != "fixed":
+            return
+        interval = max(1, self.fixed_memory_step_interval)
+        if len(self.execution_history) - self.fixed_memory_last_step < interval:
+            return
+
+        new_steps = self.execution_history[self.fixed_memory_last_step:]
+        if not new_steps:
+            return
+        summary = self._render_fixed_frequency_memory_summary(new_steps)
+        self.fixed_memory_summaries.append(summary)
+        max_summaries = max(1, self.fixed_memory_max_summaries)
+        self.fixed_memory_summaries = self.fixed_memory_summaries[-max_summaries:]
+        self.fixed_memory_last_step = len(self.execution_history)
+
+    def _render_fixed_frequency_memory_summary(self, steps: List[Dict[str, Any]]) -> str:
+        lines = [
+            f"Naive fixed-frequency summary after step {self.step_count}.",
+            f"Task request: {self.original_request or 'N/A'}",
+        ]
+        for step in steps:
+            result = step.get("execution_result") or {}
+            success = result.get("success")
+            if success is None:
+                success = step.get("assumed_successful")
+            lines.append(
+                "Step {step_number}: {action} {parameters} -> {status}".format(
+                    step_number=step.get("step_number", "?"),
+                    action=step.get("action", "unknown"),
+                    parameters=step.get("parameters") or {},
+                    status="success" if success else "failed",
+                )
+            )
+        return "\n".join(lines)
+
+    def _build_fixed_frequency_memory_context(self) -> Optional[str]:
+        if not self.fixed_memory_summaries:
+            return None
+        lines = ["[NAIVE FIXED-FREQUENCY MEMORY]"]
+        for index, summary in enumerate(self.fixed_memory_summaries[-self.fixed_memory_max_summaries:], start=1):
+            lines.append(f"Summary {index}:")
+            lines.append(summary)
+        return "\n".join(lines)
+
     def _render_runtime_event_text(
         self,
         *,
@@ -537,7 +620,9 @@ class BaseVLMPlanner:
             lines.append(f"\nPending question: {result['human_question']}")
         if result.get("error"):
             lines.append(f"\nError: {result['error']}")
-        if result.get("is_complete"):
+        if result.get("success") is False:
+            lines.append("\nResult: Task failed.")
+        elif result.get("is_complete"):
             lines.append("\nResult: Task marked complete.")
         return "\n".join(line for line in lines if line).strip()
 
@@ -574,6 +659,7 @@ class BaseVLMPlanner:
         if isinstance(payload.get("next_step"), dict):
             next_step = payload["next_step"]
             next_step.setdefault("step_number", next_step_number)
+            self._normalize_step_action(next_step)
             if not next_step.get("action_type"):
                 next_step["action_type"] = self._infer_action_type(next_step.get("action"))
             aliased_parameters = self._extract_aliased_parameters(payload)
@@ -607,6 +693,7 @@ class BaseVLMPlanner:
                     "action_type": legacy_action.get("action_type") or self._infer_action_type(skill),
                     "parameters": parameters if isinstance(parameters, dict) else {},
                 }
+                self._normalize_step_action(payload["next_step"])
                 payload.setdefault(
                     "current_step_analysis",
                     {
@@ -627,6 +714,7 @@ class BaseVLMPlanner:
                 "action_type": self._infer_action_type(action_name),
                 "parameters": parameters if isinstance(parameters, dict) else {},
             }
+            self._normalize_step_action(payload["next_step"])
             payload.setdefault(
                 "current_step_analysis",
                 {
@@ -641,6 +729,7 @@ class BaseVLMPlanner:
         tool_code_step = self._extract_tool_code_next_step(payload.get("tool_code"), next_step_number)
         if tool_code_step:
             payload["next_step"] = tool_code_step
+            self._normalize_step_action(payload["next_step"])
             payload.setdefault(
                 "current_step_analysis",
                 {
@@ -663,6 +752,7 @@ class BaseVLMPlanner:
                     "action_type": self._infer_action_type(action_name),
                     "parameters": parameters if isinstance(parameters, dict) else {},
                 }
+                self._normalize_step_action(payload["next_step"])
                 payload.setdefault(
                     "current_step_analysis",
                     {
@@ -673,6 +763,27 @@ class BaseVLMPlanner:
                 )
                 payload.setdefault("needs_human_input", False)
         return payload
+
+    def _normalize_step_action(self, next_step: Dict[str, Any]) -> None:
+        action_name = next_step.get("action")
+        canonical_action = self._canonical_action_name(action_name)
+        if canonical_action != action_name:
+            next_step["action"] = canonical_action
+            next_step["action_type"] = self._infer_action_type(canonical_action)
+
+    def _canonical_action_name(self, action_name: Any) -> Any:
+        if not isinstance(action_name, str) or not action_name.strip():
+            return action_name
+
+        normalized = action_name.strip()
+        if get_action_schema(self.profile_name, normalized):
+            return normalized
+
+        for action, skill in get_action_to_skill(self.profile_name).items():
+            if normalized == skill:
+                return action
+
+        return normalized
 
     def _extract_aliased_parameters(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         for key in (

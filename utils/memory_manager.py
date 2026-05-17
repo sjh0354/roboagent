@@ -12,13 +12,14 @@ from typing import Dict, List, Optional
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEMORY_ROOT = os.path.join(REPO_ROOT, "agent", "memory")
 DEFAULT_LOCAL_MEMORY_ROOT = os.path.join(MEMORY_ROOT, "local")
+LOCAL_MEMORY_ROOT = DEFAULT_LOCAL_MEMORY_ROOT
 INBOX_ROOT = os.path.join(MEMORY_ROOT, "inbox")
 GLOBAL_MEMORY_REL = "global_memory.md"
 USER_PREFERENCES_REL = "user_preferences.md"
 
 
 def get_local_memory_root() -> str:
-    return os.getenv("AGENT_LOCAL_MEMORY_ROOT", DEFAULT_LOCAL_MEMORY_ROOT)
+    return os.getenv("AGENT_LOCAL_MEMORY_ROOT", LOCAL_MEMORY_ROOT)
 
 
 class MemoryManager:

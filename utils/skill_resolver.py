@@ -15,6 +15,7 @@ COMMON_SKILLS = {
     "choose_web_option": "skills/common/choose_web_option/SKILL.md",
     "set_home_mode": "skills/common/set_home_mode/SKILL.md",
     "query_weather": "skills/common/query_weather/SKILL.md",
+    "play_audio": "skills/common/play_audio/SKILL.md",
 }
 
 PROFILE_SKILLS = {
@@ -77,7 +78,41 @@ class SkillResolver:
             term in request for term in ["water", "snack", "snacks", "fruit", "medicine", "bring", "fetch", "get me"]
         ):
             skill_names.add("navigate_rooms")
+        if self.profile_name == "humanoid_g1" and self._is_reading_environment_setup_request(request):
+            skill_names.update(
+                {
+                    "send_agent_message",
+                    "control_home_devices",
+                    "play_audio",
+                    "speak_and_report",
+                }
+            )
         return skill_names
+
+    def _is_reading_environment_setup_request(self, request: str) -> bool:
+        reading_terms = [
+            "看书",
+            "读书",
+            "阅读",
+            "学习",
+            "study",
+            "read",
+            "reading",
+            "desk",
+            "书桌",
+        ]
+        setup_terms = [
+            "收拾",
+            "整理",
+            "清理",
+            "准备",
+            "setup",
+            "prepare",
+            "clean",
+            "tidy",
+            "organize",
+        ]
+        return any(term in request for term in reading_terms) and any(term in request for term in setup_terms)
 
     def _is_explicit_memory_write_request(self, request: str) -> bool:
         triggers = [

@@ -14,6 +14,7 @@ Procedure:
 5. Execute the move in one `pick_and_place` action.
 6. Re-observe if item identity, source, or destination is ambiguous.
 7. Report readiness or blockage to the humanoid when needed.
+8. If PI0/VLA execution returns retryable failure and transient visual memory shows no object movement or a stuck approach, retry `pick_and_place` once with clearer `item_name`, `source`, and `target` when the goal is still valid.
 
 Constraints:
 - Stay within the store workspace.
@@ -21,6 +22,7 @@ Constraints:
 - Do not assume the only valid route is `shelf -> counter`.
 - Prefer the locations and object names actually supported by the current task and visual evidence.
 - Do not invent lower-level manipulation actions.
+- Do not mark the task complete after retryable PI0/VLA failure unless the latest images show the object at the destination.
 
 Notes:
 - `item_name`, `source`, and `target` are open-ended task parameters, not fixed enums.

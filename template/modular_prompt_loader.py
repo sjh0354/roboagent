@@ -48,6 +48,7 @@ def _build_sections(
     include_memory: bool,
     include_skill_details: bool,
     skill_paths: List[str] | None = None,
+    scenario_paths: List[str] | None = None,
 ) -> List[Tuple[str, str]]:
     sections = [
         ("Bootstrap", _read_text("bootstrap.md")),
@@ -64,6 +65,8 @@ def _build_sections(
             sections.append(("Hardware Memory", hardware_memory))
 
     if include_skill_details:
+        for relative_path in scenario_paths or []:
+            sections.append((f"Scenario: {relative_path}", _read_text(relative_path)))
         for relative_path in skill_paths or _list_skill_paths(profile_name):
             sections.append((f"Skill: {relative_path}", _read_text(relative_path)))
 
@@ -140,11 +143,16 @@ def build_runtime_system_prompt(
         execution_history=execution_history or [],
         current_location=current_location,
     )
+    active_scenario_paths = _resolve_runtime_scenarios(
+        profile_name=profile_name,
+        original_request=original_request,
+    )
     sections = _build_sections(
         profile_name=profile_name,
         include_memory=include_memory,
         include_skill_details=True,
         skill_paths=active_skill_paths,
+        scenario_paths=active_scenario_paths,
     )
     rendered_sections = [f"# {title}\n\n{body}" for title, body in sections]
     prompt = "\n\n".join(rendered_sections)
@@ -152,6 +160,12 @@ def build_runtime_system_prompt(
     active_skill_names = "\n".join([f"- {os.path.basename(os.path.dirname(path))}" for path in active_skill_paths])
     if active_skill_names:
         prompt = f"{prompt}\n\n# Active Skills\n\n{active_skill_names}"
+
+    active_scenario_names = "\n".join(
+        [f"- {os.path.splitext(os.path.basename(path))[0]}" for path in active_scenario_paths]
+    )
+    if active_scenario_names:
+        prompt = f"{prompt}\n\n# Active Scenarios\n\n{active_scenario_names}"
 
     include_legacy = os.getenv("AGENT_INCLUDE_LEGACY_PROMPT", "1") == "1"
     if include_legacy and legacy_prompt:
@@ -164,3 +178,35 @@ def build_runtime_system_prompt(
         )
 
     return prompt
+
+
+def _resolve_runtime_scenarios(profile_name: str, original_request: str) -> List[str]:
+    request = (original_request or "").lower()
+    if profile_name != "humanoid_g1":
+        return []
+
+    reading_terms = [
+        "看书",
+        "读书",
+        "阅读",
+        "学习",
+        "study",
+        "read",
+        "reading",
+        "desk",
+        "书桌",
+    ]
+    setup_terms = [
+        "收拾",
+        "整理",
+        "清理",
+        "准备",
+        "setup",
+        "prepare",
+        "clean",
+        "tidy",
+        "organize",
+    ]
+    if any(term in request for term in reading_terms) and any(term in request for term in setup_terms):
+        return ["scenarios/reading_environment_setup.md"]
+    return []

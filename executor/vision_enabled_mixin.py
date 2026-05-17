@@ -208,7 +208,7 @@ class VisionEnabledMixin:
             self._capture_buffer_frame(source="interval")
 
     def _capture_buffer_frame(self, source: str = "buffer") -> Optional[ObservationFrame]:
-        observation = self._capture_observation_snapshot(include_vlm_description=False)
+        observation = self._capture_observation_snapshot(include_vlm_description=False, quiet=True)
         if not observation:
             return None
         frame = ObservationFrame(
@@ -220,9 +220,13 @@ class VisionEnabledMixin:
         self.observation_buffer.add_frame(frame)
         return frame
 
-    def _capture_observation_snapshot(self, include_vlm_description: bool = False) -> Optional[Dict[str, Any]]:
+    def _capture_observation_snapshot(
+        self,
+        include_vlm_description: bool = False,
+        quiet: bool = False,
+    ) -> Optional[Dict[str, Any]]:
         if not self.simulation_mode and self.camera_manager:
-            observation_image = self.camera_manager.capture_image()
+            observation_image = self.camera_manager.capture_image(quiet=quiet)
             if not observation_image:
                 if self.verbose:
                     print("⚠️  Camera capture failed, using previous state or None")

@@ -70,12 +70,13 @@ class DaBaiCameraManager:
             if not ret:
                 time.sleep(0.1)
 
-    def capture_image(self, filename=None):
+    def capture_image(self, filename=None, quiet=False):
         """
         Capture a single color frame and save to disk
         
         Args:
             filename: Optional filename (default: timestamped)
+            quiet: If True, suppress successful capture logging
             
         Returns:
             str: Path to saved image file
@@ -109,7 +110,7 @@ class DaBaiCameraManager:
             # Save image
             try:
                 cv2.imwrite(save_path, frame)
-                if self.verbose:
+                if self.verbose and not quiet:
                     print(f"📸 Image captured: {save_path}")
                 return save_path
             except Exception as e:

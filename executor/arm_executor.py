@@ -357,7 +357,7 @@ class ArmExecutor:
         """Execute perception actions"""
         _ = params
 
-        if action == "get_observation":
+        if action in {"get_observation", "observe_workspace"}:
             return self._get_observation()
         else:
             return ExecutionResult(

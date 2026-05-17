@@ -14,6 +14,7 @@ import os
 
 from utils.memory_manager import MemoryManager
 from utils.mock_weather_api import MockWeatherAPI
+from utils.mock_music_api import MockMusicAPI
 
 # Dummy placeholder for SmartHomeAPI
 class SmartHomeAPI:
@@ -102,6 +103,7 @@ class HumanoidExecutor:
         # Mock weather backend for simulation experiments
         weather_api_version = os.getenv("WEATHER_API_VERSION", "v2")
         self.weather_api = MockWeatherAPI(api_version=weather_api_version)
+        self.music_api = MockMusicAPI()
 
         # Execution statistics
         self.execution_count = 0
@@ -313,7 +315,14 @@ class HumanoidExecutor:
             )
 
         elif action == "control_light":
-            return self._control_light(params.get("action", ""))
+            return self._control_light(
+                params.get("action", ""),
+                device=params.get("device"),
+                brightness=params.get("brightness"),
+            )
+
+        elif action == "play_audio":
+            return self._play_audio(params)
 
         elif action == "web_search":
             return self._web_search(
@@ -414,28 +423,48 @@ class HumanoidExecutor:
                 data={"ac_status": action, "temperature": temperature}
             )
 
-    def _control_light(self, action: str) -> ExecutionResult:
+    def _control_light(
+        self,
+        action: str,
+        device: Optional[str] = None,
+        brightness: Optional[int] = None,
+    ) -> ExecutionResult:
         """Control lighting"""
+        target_device = device or "room_light"
         if self.simulation_mode:
             if action == "turn_on":
-                print(f"💡 Turning on lights")
+                print(f"💡 Turning on {target_device}")
                 return ExecutionResult(
                     success=True,
-                    feedback="Lights turned on successfully",
-                    data={"light_status": "on"}
+                    feedback=f"{target_device} turned on successfully",
+                    data={"light_status": "on", "device": target_device, "brightness": brightness}
                 )
             elif action == "turn_off":
-                print(f"💡 Turning off lights")
+                print(f"💡 Turning off {target_device}")
                 return ExecutionResult(
                     success=True,
-                    feedback="Lights turned off successfully",
-                    data={"light_status": "off"}
+                    feedback=f"{target_device} turned off successfully",
+                    data={"light_status": "off", "device": target_device, "brightness": brightness}
+                )
+            elif action == "set_brightness":
+                if not isinstance(brightness, int) or brightness < 0 or brightness > 100:
+                    return ExecutionResult(
+                        success=False,
+                        feedback="Invalid light brightness",
+                        data={"device": target_device, "brightness": brightness},
+                        error="Brightness must be an integer from 0 to 100",
+                    )
+                print(f"💡 Setting {target_device} brightness to {brightness}%")
+                return ExecutionResult(
+                    success=True,
+                    feedback=f"{target_device} brightness set to {brightness}%",
+                    data={"light_status": "on", "device": target_device, "brightness": brightness}
                 )
             else:
                 return ExecutionResult(
                     success=False,
                     feedback=f"Invalid light action: {action}",
-                    error="Action must be 'turn_on' or 'turn_off'"
+                    error="Action must be 'turn_on', 'turn_off', or 'set_brightness'"
                 )
         else:
             # TODO: Real implementation
@@ -444,8 +473,28 @@ class HumanoidExecutor:
             return ExecutionResult(
                 success=True,
                 feedback=f"Real light control executed: {action}",
-                data={"light_status": action}
+                data={"light_status": action, "device": target_device, "brightness": brightness}
             )
+
+    def _play_audio(self, payload: Dict[str, Any]) -> ExecutionResult:
+        """Play background audio through a mock external music API."""
+        response = self.music_api.play(payload)
+        if response.success:
+            return ExecutionResult(
+                success=True,
+                feedback="Audio API request succeeded",
+                data={"audio": response.data, "request_payload": payload},
+            )
+        return ExecutionResult(
+            success=False,
+            feedback="Audio API request failed",
+            data={
+                "request_payload": payload,
+                "error_code": response.error_code,
+                "error_message": response.error_message,
+            },
+            error=response.error_message,
+        )
 
     def _web_search(self, url: str, query: str) -> ExecutionResult:
         """Perform web search"""

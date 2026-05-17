@@ -21,6 +21,8 @@ Available skills:
   - Use for no-visual benchmark tasks that require choosing one explicit home-device mode from a provided candidate list.
 - `query_weather`
   - Use weather backend query in API-update reflection experiments.
+- `play_audio`
+  - Use for background sound, white noise, rain noise, or ambient audio playback.
 - `observe_scene`
   - Use when a fresh visual observation is needed before the next action.
 
@@ -34,6 +36,7 @@ Allowed actions summary:
 - `choose_web_option`
 - `set_home_mode`
 - `navigate_to`
+- `play_audio`
 - `pick`
 - `place`
 - `wait_for`
