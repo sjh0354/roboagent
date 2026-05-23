@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from executor.humanoid_executor import HumanoidExecutor
+from executor.arm_executor import ArmExecutor
 from experiments.multidomain_reading_setup.run_eval import (
     FAILURE_VARIANTS,
     apply_failure_variant,
@@ -125,6 +126,33 @@ def test_humanoid_executor_light_supports_brightness_and_device():
 
 def test_humanoid_executor_play_audio_tool():
     executor = HumanoidExecutor(simulation_mode=True, verbose=False)
+
+    result = executor.execute_action(
+        "tool",
+        "play_audio",
+        {"action": "play", "audio_type": "white_noise", "volume": 35},
+    )
+
+    assert result.success is True
+    assert result.data["audio"]["audio_type"] == "white_noise"
+
+
+def test_arm_executor_light_supports_brightness_and_device():
+    executor = ArmExecutor(simulation_mode=True, verbose=False)
+
+    result = executor.execute_action(
+        "tool",
+        "control_light",
+        {"action": "set_brightness", "device": "background_light", "brightness": 30},
+    )
+
+    assert result.success is True
+    assert result.data["device"] == "background_light"
+    assert result.data["brightness"] == 30
+
+
+def test_arm_executor_play_audio_tool():
+    executor = ArmExecutor(simulation_mode=True, verbose=False)
 
     result = executor.execute_action(
         "tool",

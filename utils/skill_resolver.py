@@ -16,6 +16,7 @@ COMMON_SKILLS = {
     "set_home_mode": "skills/common/set_home_mode/SKILL.md",
     "query_weather": "skills/common/query_weather/SKILL.md",
     "play_audio": "skills/common/play_audio/SKILL.md",
+    "control_home_devices": "skills/humanoid_g1/control_home_devices/SKILL.md",
 }
 
 PROFILE_SKILLS = {
@@ -78,10 +79,13 @@ class SkillResolver:
             term in request for term in ["water", "snack", "snacks", "fruit", "medicine", "bring", "fetch", "get me"]
         ):
             skill_names.add("navigate_rooms")
-        if self.profile_name == "humanoid_g1" and self._is_reading_environment_setup_request(request):
+        if self._is_reading_environment_setup_request(request):
+            if self.profile_name == "humanoid_g1":
+                skill_names.add("send_agent_message")
+            if self.profile_name == "ur5e":
+                skill_names.add("store_pick_and_place")
             skill_names.update(
                 {
-                    "send_agent_message",
                     "control_home_devices",
                     "play_audio",
                     "speak_and_report",

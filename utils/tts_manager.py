@@ -52,8 +52,11 @@ class TTSManager:
         # Resolve voice
         self.voice = self.VOICE_MAPPING.get(voice, voice)
         
-        # Check API key for DashScope
-        self.api_key = os.getenv("DASHSCOPE_API_KEY")
+        # Check API key for DashScope. GENAI_API_KEY is accepted for compatibility
+        # with the Gemini/DashScope-compatible planner environment.
+        self.api_key = os.getenv("DASHSCOPE_API_KEY") or os.getenv("GENAI_API_KEY")
+        if DASHSCOPE_AVAILABLE and self.api_key:
+            dashscope.api_key = self.api_key
         
         if self.verbose:
             self._print_status()
@@ -62,18 +65,31 @@ class TTSManager:
         """Print initialization status"""
         print(f"🎤 TTS Manager Initialized")
         print(f"   - DashScope SDK: {'✅ Available' if DASHSCOPE_AVAILABLE else '❌ Not installed (pip install dashscope)'}")
-        print(f"   - API Key: {'✅ Found' if self.api_key else '❌ Not found (DASHSCOPE_API_KEY)'}")
-        print(f"   - System TTS: {'✅ Available (espeak)' if self._check_espeak() else '⚠️ Not found'}")
+        print(f"   - API Key: {'✅ Found' if self.api_key else '❌ Not found (DASHSCOPE_API_KEY or GENAI_API_KEY)'}")
+        system_backend = self._system_tts_backend()
+        print(f"   - System TTS: {f'✅ Available ({system_backend})' if system_backend else '⚠️ Not found'}")
         print(f"   - Volume: {int(self.volume * 100)}%")
         print(f"   - Default Voice: {self.voice}")
 
     def _check_espeak(self) -> bool:
         """Check if espeak is available"""
+        return self._command_exists("espeak")
+
+    def _command_exists(self, command: str) -> bool:
+        """Check if a command is available on PATH."""
         try:
-            subprocess.run(["which", "espeak"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            subprocess.run(["which", command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             return True
         except subprocess.CalledProcessError:
             return False
+
+    def _system_tts_backend(self) -> Optional[str]:
+        """Return the first available offline/system TTS backend."""
+        if self._command_exists("espeak"):
+            return "espeak"
+        if self._command_exists("spd-say"):
+            return "spd-say"
+        return None
 
     def speak(self, text: str, model: str = "cosyvoice-v3-flash", block: bool = False, volume: Optional[float] = None, voice: Optional[str] = None):
         """
@@ -118,7 +134,7 @@ class TTSManager:
         # Auto selection
         if DASHSCOPE_AVAILABLE and self.api_key:
             return "dashscope"
-        elif self._check_espeak():
+        elif self._system_tts_backend():
             return "system"
         else:
             return "mock"
@@ -139,11 +155,15 @@ class TTSManager:
                 # Configure synthesizer
                 # Use passed voice parameter
                 synthesizer = SpeechSynthesizer(model=model, voice=voice, format=AudioFormat.WAV_16000HZ_MONO_16BIT) 
+                connect_timeout = float(os.getenv("TTS_DASHSCOPE_CONNECT_TIMEOUT_SECONDS", "15"))
+                if connect_timeout > 0 and hasattr(synthesizer, "_SpeechSynthesizer__connect"):
+                    # DashScope SDK's normal call path hard-codes a 5s WebSocket connect
+                    # wait. Preconnecting lets slow but usable networks finish the handshake.
+                    synthesizer._SpeechSynthesizer__connect(connect_timeout)
                 
                 # Call API
-                # The 5s timeout seems to be a hard limit for connection in some SDK versions.
-                # We try once; if it fails, we fall back to system immediately to avoid long delays.
-                response = synthesizer.call(text=text, timeout_millis=30000)
+                synthesis_timeout_ms = int(os.getenv("TTS_DASHSCOPE_SYNTHESIS_TIMEOUT_MS", "30000"))
+                response = synthesizer.call(text=text, timeout_millis=synthesis_timeout_ms)
                 
                 # Check if response is bytes (success) or something else
                 if isinstance(response, bytes):
@@ -192,13 +212,20 @@ class TTSManager:
         """Speak using system espeak"""
         def _run():
             try:
-                # Use espeak
-                # -a amplitude: 0 to 200, default is 100. We map 0-1.0 to 0-200, or just 0-100?
-                # espeak docs say: "Amplitude, 0 to 200, default is 100"
-                # Let's map 1.0 -> 100 to be safe/standard, or 200 for boost?
-                # Sticking to 1.0 -> 100 for now.
-                amplitude = int(volume * 100)
-                subprocess.run(["espeak", "-a", str(amplitude), text], check=True)
+                backend = self._system_tts_backend()
+                if backend == "espeak":
+                    # espeak amplitude: 0 to 200, default 100.
+                    amplitude = int(volume * 100)
+                    subprocess.run(["espeak", "-a", str(amplitude), text], check=True)
+                elif backend == "spd-say":
+                    intensity = int((volume * 200) - 100)
+                    cmd = ["spd-say", "-i", str(intensity)]
+                    if block:
+                        cmd.append("-w")
+                    cmd.append(text)
+                    subprocess.run(cmd, check=True)
+                else:
+                    raise FileNotFoundError("No system TTS backend found (espeak/spd-say)")
             except Exception as e:
                 if self.verbose:
                     print(f"❌ System TTS failed: {e}")

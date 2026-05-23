@@ -69,7 +69,11 @@ class VisionEnabledMixin:
         observation_image = None
 
         if not self.simulation_mode and self.camera_manager:
-            time.sleep(1.0)
+            settle_seconds = float(os.getenv("POST_ACTION_OBSERVATION_SETTLE_SECONDS", "3.0"))
+            if settle_seconds > 0:
+                if getattr(self, "verbose", False):
+                    print(f"   ⏳ Waiting {settle_seconds:.1f}s before post-action observation...")
+                time.sleep(settle_seconds)
             observation_image = self.camera_manager.capture_image()
             if self.image_manager:
                 self.image_manager.get_observation_after_action(action_type, action_name, parameters)
@@ -85,7 +89,8 @@ class VisionEnabledMixin:
             if self.image_manager:
                 base_result.data["state"] = self.image_manager.state.copy()
 
-            if self.vlm_client and os.path.exists(observation_image):
+            describe_post_action = os.getenv("POST_ACTION_VLM_DESCRIPTION", "0") == "1"
+            if describe_post_action and self.vlm_client and os.path.exists(observation_image):
                 try:
                     base_result.data["vlm_observation"] = self.vlm_client.get_observation_description(observation_image)
                 except Exception as error:
@@ -94,9 +99,11 @@ class VisionEnabledMixin:
 
         return base_result
 
-    def get_current_observation(self) -> Dict[str, Any]:
+    def get_current_observation(self, include_vlm_description: bool = False) -> Dict[str, Any]:
         """Get current visual observation."""
-        observation_data = self._capture_observation_snapshot(include_vlm_description=True)
+        observation_data = self._capture_observation_snapshot(
+            include_vlm_description=include_vlm_description
+        )
         if observation_data is None:
             return {
                 "image_path": None,

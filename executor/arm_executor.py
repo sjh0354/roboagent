@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional
 import json
 from utils.memory_manager import MemoryManager
+from utils.mock_music_api import MockMusicAPI
 
 try:
     from utils.tts_manager import TTSManager
@@ -69,6 +70,7 @@ class ArmExecutor:
         self.voice = voice
         self.message_transport = None
         self.memory_manager = MemoryManager(profile_name="ur5e", verbose=verbose)
+        self.music_api = MockMusicAPI()
 
         # Hardware/API clients would be initialized here
         self.robot_controller = None
@@ -185,7 +187,13 @@ class ArmExecutor:
         
         # Trigger TTS
         if self.tts_manager:
-            self.tts_manager.speak(message, model="cosyvoice-v1", block=False)
+            self.tts_manager.speak(
+                message,
+                model="cosyvoice-v3-flash",
+                block=False,
+                voice=self.voice,
+                volume=self.volume,
+            )
         mirrored = self._mirror_speak_to_transport(message)
             
         if self.simulation_mode:
@@ -253,6 +261,14 @@ class ArmExecutor:
                 scope=params.get("scope", "global"),
                 category=params.get("category", "note"),
             )
+        elif action == "control_light":
+            return self._control_light(
+                params.get("action", ""),
+                device=params.get("device"),
+                brightness=params.get("brightness"),
+            )
+        elif action == "play_audio":
+            return self._play_audio(params)
         else:
             return ExecutionResult(
                 success=False,
@@ -303,6 +319,71 @@ class ArmExecutor:
             success=True,
             feedback=f"Stored {category} memory in {scope} scope",
             data={"content": content, "scope": scope, "category": category, "path": path},
+        )
+
+    def _control_light(
+        self,
+        action: str,
+        device: Optional[str] = None,
+        brightness: Optional[int] = None,
+    ) -> ExecutionResult:
+        """Control reading-related lighting through the experiment smart-home adapter."""
+        target_device = device or "room_light"
+        if action == "turn_on":
+            if self.verbose:
+                print(f"💡 Turning on {target_device}")
+            return ExecutionResult(
+                success=True,
+                feedback=f"{target_device} turned on successfully",
+                data={"light_status": "on", "device": target_device, "brightness": brightness},
+            )
+        if action == "turn_off":
+            if self.verbose:
+                print(f"💡 Turning off {target_device}")
+            return ExecutionResult(
+                success=True,
+                feedback=f"{target_device} turned off successfully",
+                data={"light_status": "off", "device": target_device, "brightness": brightness},
+            )
+        if action == "set_brightness":
+            if not isinstance(brightness, int) or brightness < 0 or brightness > 100:
+                return ExecutionResult(
+                    success=False,
+                    feedback="Invalid light brightness",
+                    data={"device": target_device, "brightness": brightness},
+                    error="Brightness must be an integer from 0 to 100",
+                )
+            if self.verbose:
+                print(f"💡 Setting {target_device} brightness to {brightness}%")
+            return ExecutionResult(
+                success=True,
+                feedback=f"{target_device} brightness set to {brightness}%",
+                data={"light_status": "on", "device": target_device, "brightness": brightness},
+            )
+        return ExecutionResult(
+            success=False,
+            feedback=f"Invalid light action: {action}",
+            error="Action must be 'turn_on', 'turn_off', or 'set_brightness'",
+        )
+
+    def _play_audio(self, payload: Dict[str, Any]) -> ExecutionResult:
+        """Play background audio through the experiment audio API."""
+        response = self.music_api.play(payload)
+        if response.success:
+            return ExecutionResult(
+                success=True,
+                feedback="Audio API request succeeded",
+                data={"audio": response.data, "request_payload": payload},
+            )
+        return ExecutionResult(
+            success=False,
+            feedback="Audio API request failed",
+            data={
+                "request_payload": payload,
+                "error_code": response.error_code,
+                "error_message": response.error_message,
+            },
+            error=response.error_message,
         )
 
     # ==================== ACT Actions ====================

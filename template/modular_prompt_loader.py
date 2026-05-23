@@ -182,7 +182,7 @@ def build_runtime_system_prompt(
 
 def _resolve_runtime_scenarios(profile_name: str, original_request: str) -> List[str]:
     request = (original_request or "").lower()
-    if profile_name != "humanoid_g1":
+    if profile_name not in {"humanoid_g1", "ur5e"}:
         return []
 
     reading_terms = [
@@ -208,5 +208,7 @@ def _resolve_runtime_scenarios(profile_name: str, original_request: str) -> List
         "organize",
     ]
     if any(term in request for term in reading_terms) and any(term in request for term in setup_terms):
+        if profile_name == "ur5e":
+            return ["scenarios/arm_reading_environment_setup.md"]
         return ["scenarios/reading_environment_setup.md"]
     return []

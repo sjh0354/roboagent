@@ -37,7 +37,7 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
     - VLM planner receives images directly (not text descriptions)
     - Autonomous execution loop without interactive feedback waiting (half-open-loop)
     - Executor failures stop the loop instead of being treated as completed actions
-    - Humanoid interaction only for: task responses, clarifications, status updates
+    - Direct user interaction for task responses, clarifications, and status updates
     """
 
     def __init__(self,
@@ -65,6 +65,8 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         self.transport = transport
         self.task_failed = False
         self.task_error = None
+        self.previous_observation_image = None
+        self.initial_scene_summary = None
         super().__init__(
             profile_name="ur5e",
             api_key=api_key,
@@ -102,13 +104,23 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
     def _reset_runtime_state(self):
         self.waiting_for_humanoid = False
         self.humanoid_question = None
+        self.waiting_for_user = False
+        self.user_question = None
         self.pending_retry_context = None
         self.task_failed = False
         self.task_error = None
+        self.latest_visual_outcome = None
+        self.initial_scene_summary = None
 
     def start_new_task(self, request: str, run_autonomously: bool = True,
                       observation_image: Optional[str] = None) -> Dict:
-        self.current_observation_image = observation_image or self._get_default_observation_image()
+        if observation_image:
+            self.current_observation_image = observation_image
+            self.initial_scene_summary = None
+        else:
+            initial_obs = self._get_default_observation(include_vlm_description=True)
+            self.current_observation_image = initial_obs.get("image_path") or "simulation_images/store/default.jpg"
+            self.initial_scene_summary = initial_obs.get("vlm_description")
         return super().start_new_task(request, run_autonomously)
 
     def _print_task_started(self, request: str):
@@ -123,16 +135,31 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
 
     def _get_default_observation_image(self) -> str:
         """Get default observation image for store workspace"""
-        # Delegate to executor
-        if hasattr(self, 'executor'):
-             obs = self.executor.get_current_observation()
-             if obs.get('image_path'):
-                 return obs['image_path']
-
-        # Fallback for simulation or failure
+        obs = self._get_default_observation(include_vlm_description=False)
+        if obs.get("image_path"):
+            return obs["image_path"]
         return "simulation_images/store/default.jpg"
 
+    def _get_default_observation(self, include_vlm_description: bool = False) -> Dict:
+        """Get initial/current workspace observation from the executor."""
+        # Delegate to executor
+        if hasattr(self, 'executor'):
+             try:
+                 obs = self.executor.get_current_observation(
+                     include_vlm_description=include_vlm_description
+                 )
+             except TypeError:
+                 obs = self.executor.get_current_observation()
+             if obs.get('image_path'):
+                 return obs
+
+        # Fallback for simulation or failure
+        return {"image_path": "simulation_images/store/default.jpg", "vlm_description": None}
+
     def provide_humanoid_response(self, response: str) -> Dict:
+        return self.provide_input_response(response)
+
+    def provide_user_response(self, response: str) -> Dict:
         return self.provide_input_response(response)
 
     def set_transport(self, transport: Optional[MessageTransport]):
@@ -159,7 +186,7 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
 
     def _handle_pause_prompt(self, just_spoke: bool, question: Optional[str]):
         if self.verbose:
-            print(f"\n⏸️  PAUSED: Waiting for humanoid input")
+            print(f"\n⏸️  PAUSED: Waiting for user input")
             print(f"❓ Question: {question}")
 
     def _execute_step(self, step_plan: Dict):
@@ -212,6 +239,7 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             print("="*70 + "\n")
 
         step_started_at = time.time()
+        before_observation_image = self.current_observation_image
         # Execute via Executor
         result = self.executor.execute_action(
             next_step.get("action_type"),
@@ -227,12 +255,25 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         self.execution_history[-1]["assumed_successful"] = bool(result.success)
         self.execution_history[-1]["execution_result"] = result.to_dict()
         self.execution_history[-1]["duration_seconds"] = round(step_finished_at - step_started_at, 2)
-        self.transient_memory_packet = self._build_transient_memory_packet(
-            action_name=next_step.get("action", "unknown"),
+        self.latest_visual_outcome = self._infer_post_action_visual_outcome(
+            next_step=next_step,
+            result=result,
+            before_image=before_observation_image,
+            after_image=self.current_observation_image,
             start_ts=step_started_at,
             end_ts=step_finished_at,
-            primary_image=result.data.get("observation_image") or self.current_observation_image,
         )
+        if self.latest_visual_outcome:
+            self.execution_history[-1]["visual_outcome"] = self.latest_visual_outcome
+        self.transient_memory_packet = None
+        keep_success_frames = os.getenv("TRANSIENT_MEMORY_ON_SUCCESS", "0") == "1"
+        if (not result.success) or keep_success_frames:
+            self.transient_memory_packet = self._build_transient_memory_packet(
+                action_name=next_step.get("action", "unknown"),
+                start_ts=step_started_at,
+                end_ts=step_finished_at,
+                primary_image=result.data.get("observation_image") or self.current_observation_image,
+            )
 
         if not result.success and self._should_retry_failed_vla_action(next_step, result):
             self.vla_retry_count += 1
@@ -301,6 +342,83 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
             "retry_count": self.vla_retry_count,
             "max_retries": self._max_vla_retries(),
         }
+
+    def _infer_post_action_visual_outcome(
+        self,
+        *,
+        next_step: Dict,
+        result,
+        before_image: Optional[str],
+        after_image: Optional[str],
+        start_ts: Optional[float] = None,
+        end_ts: Optional[float] = None,
+    ) -> Optional[Dict]:
+        """Build action-agnostic visual feedback for the next planning step."""
+        if not after_image:
+            return None
+
+        parameters = next_step.get("parameters") or {}
+        outcome = {
+            "requested_action": next_step.get("action"),
+            "requested_action_type": next_step.get("action_type"),
+            "requested_parameters": parameters,
+            "executor_success": bool(result.success),
+            "after_image": after_image,
+            "visual_delta_mode": "action_blind",
+            "instruction": (
+                "Use requested_action/requested_parameters as attempted-command metadata only. "
+                "The visual_delta is generated without task intent by default; infer the next world state "
+                "from observed visual changes, not from what was requested."
+            ),
+        }
+
+        data = result.data or {}
+        if data.get("vlm_observation"):
+            outcome["post_action_observation"] = data.get("vlm_observation")
+
+        process_images: list[str] = []
+        if (
+            start_ts is not None
+            and end_ts is not None
+            and hasattr(self, "_get_transient_memory_frames")
+        ):
+            max_process_frames = max(0, int(os.getenv("POST_ACTION_DELTA_MAX_PROCESS_FRAMES", "2")))
+            if max_process_frames:
+                frames = self._get_transient_memory_frames(start_ts, end_ts)
+                prepared = self._prepare_transient_frames(frames)
+                for frame in prepared[:max_process_frames]:
+                    image_path = frame.get("image_path")
+                    if image_path and image_path not in {before_image, after_image}:
+                        process_images.append(image_path)
+
+        should_compare = os.getenv("POST_ACTION_VLM_COMPARE", "1") == "1"
+        can_compare = (
+            should_compare
+            and before_image
+            and after_image
+            and before_image != after_image
+            and hasattr(self.vlm_client, "analyze_action_visual_delta")
+        )
+        if can_compare:
+            try:
+                include_action_context = os.getenv("POST_ACTION_DELTA_INCLUDE_ACTION_CONTEXT", "0") == "1"
+                if include_action_context:
+                    outcome["visual_delta_mode"] = "action_context"
+                visual_delta = self.vlm_client.analyze_action_visual_delta(
+                    before_image=before_image,
+                    after_image=after_image,
+                    process_images=process_images,
+                    action_name=str(next_step.get("action") or "unknown"),
+                    action_parameters=parameters,
+                    include_action_context=include_action_context,
+                )
+                outcome["visual_delta"] = visual_delta
+            except Exception as error:
+                if self.verbose:
+                    print(f"⚠️  Post-action visual delta failed: {str(error)}")
+                outcome["visual_delta_error"] = str(error)
+
+        return outcome
 
     def _apply_real_trajectory_policy(self, next_step: Dict, parameters: Dict) -> Optional[str]:
         """Constrain desk-cleaning real execution to the recorded replay trajectories."""
@@ -477,18 +595,54 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         context_parts = []
 
         # Original request
-        context_parts.append(f"[ORIGINAL REQUEST FROM HUMANOID]: {self.original_request}")
+        context_parts.append(f"[ORIGINAL USER REQUEST]: {self.original_request}")
+
+        initial_scene_summary = getattr(self, "initial_scene_summary", None)
+        if initial_scene_summary:
+            context_parts.append(
+                "\n[INITIAL SCENE SUMMARY]: Captured once at task start for grounding. "
+                "Do not treat it as current after actions; use the current image and "
+                "post-action visual delta for state updates.\n"
+                f"{initial_scene_summary}"
+            )
 
         # Execution history
         if self.execution_history:
             context_parts.append(f"\n[STEPS EXECUTED SO FAR]: {len(self.execution_history)}")
             for exec_step in self.execution_history[-3:]:
+                result = exec_step.get("execution_result") or {}
+                status = result.get("success")
+                if status is None:
+                    status = exec_step.get("assumed_successful")
+                status_text = "executor_success" if status else "executor_failed"
                 context_parts.append(
                     f"  - Step {exec_step['step_number']}: {exec_step['action']} "
-                    f"with {exec_step['parameters']}"
+                    f"with {exec_step['parameters']} -> {status_text}"
                 )
         else:
             context_parts.append("\n[STEPS EXECUTED SO FAR]: None (this is the first step)")
+
+        if self._is_reading_desk_cleanup_request():
+            context_parts.append(
+                "\n[READING DESK CLEANUP COMPLETION RULE]: Treat execution history as attempted commands, "
+                "not guaranteed state changes. Use the current image and post-action visual outcome feedback "
+                "to decide what actually changed before choosing the next step."
+            )
+            if self._final_reading_confirmation_spoken():
+                context_parts.append(
+                    "\n[TERMINATION REQUIRED]: The final reading setup confirmation has already been spoken "
+                    "successfully. Do not call `speak` again. Return the task-completion JSON now with "
+                    "`next_step: null`, `needs_human_input: false`, and `user_question: null`."
+                )
+
+        if self.latest_visual_outcome:
+            context_parts.append(
+                "\n[POST-ACTION VISUAL OUTCOME FEEDBACK]: This feedback compares the image before the "
+                "last action with the image after it. By default the visual_delta is generated action-blind, "
+                "without seeing the requested action parameters. Trust observed visual changes over the "
+                "requested action parameters when updating the world state.\n"
+                f"{json.dumps(self.latest_visual_outcome, ensure_ascii=False, indent=2)}"
+            )
 
         # Current status
         context_parts.append(f"\n[CURRENT STATUS]: Planning step #{self.step_count + 1}")
@@ -534,8 +688,26 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
 
         return "\n".join(context_parts)
 
+    def _final_reading_confirmation_spoken(self) -> bool:
+        """Return True once the one-time reading setup final confirmation succeeded."""
+        final_message = "桌子已清理，阅读灯和背景音已为您打开。"
+        for exec_step in reversed(self.execution_history):
+            if exec_step.get("action") != "speak":
+                continue
+            params = exec_step.get("parameters") or {}
+            message = str(params.get("message") or "")
+            if final_message not in message:
+                continue
+            result = exec_step.get("execution_result") or {}
+            status = result.get("success")
+            if status is None:
+                status = exec_step.get("assumed_successful")
+            return bool(status)
+        return False
+
     def _parse_step_plan(self, response_text: str) -> Dict:
         """Parse VLM response into step plan"""
+        response_text = response_text or ""
         cleaned_text = clean_json_response(response_text)
 
         is_valid, message = validate_arm_vlm_response(response_text)
@@ -546,11 +718,15 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         try:
             payload = json.loads(cleaned_text)
             if isinstance(payload, dict):
-                return self._normalize_step_plan_payload(payload)
+                normalized = self._normalize_step_plan_payload(payload)
+                if normalized.get("user_question") is None and normalized.get("humanoid_question"):
+                    normalized["user_question"] = normalized["humanoid_question"]
+                return normalized
             return payload
         except json.JSONDecodeError as e:
             if self.verbose:
                 print(f"❌ JSON parsing failed: {str(e)}")
+                print(f"Raw VLM response preview: {repr(response_text[:500])}")
             return {
                 "error": f"JSON parsing failed: {str(e)}",
                 "raw_response": response_text[:500]
@@ -583,30 +759,34 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         print("="*70 + "\n")
 
     def _is_waiting_for_input(self) -> bool:
-        return self.waiting_for_humanoid
+        return self.waiting_for_user
 
     def _set_waiting_state(self, question: Optional[str]):
+        self.waiting_for_user = True
+        self.user_question = question
         self.waiting_for_humanoid = True
         self.humanoid_question = question
 
     def _clear_waiting_state(self):
+        self.waiting_for_user = False
+        self.user_question = None
         self.waiting_for_humanoid = False
         self.humanoid_question = None
 
     def _get_pending_question(self) -> Optional[str]:
-        return self.humanoid_question
+        return self.user_question
 
     def _get_waiting_status(self) -> str:
-        return "waiting_for_humanoid"
+        return "waiting_for_user"
 
     def _get_question_field(self) -> str:
-        return "humanoid_question"
+        return "user_question"
 
     def _get_input_role_name(self) -> str:
-        return "humanoid"
+        return "user"
 
     def _get_response_prefix(self) -> str:
-        return "HUMANOID RESPONSE"
+        return "USER RESPONSE"
 
     def _get_summary_extras(self) -> Dict:
         return {
@@ -627,6 +807,12 @@ class AutonomousArmVLMPlanner(BaseVLMPlanner):
         if self.verbose:
             print(f"🔄 Switched VLM model: {old_model} → {model_name}")
 
+    def close(self):
+        """Release executor-owned resources such as camera pipelines."""
+        executor = getattr(self, "executor", None)
+        if executor and hasattr(executor, "close"):
+            executor.close()
+
 
 def main():
     """Main function for testing"""
@@ -636,6 +822,11 @@ def main():
     parser = argparse.ArgumentParser(description="Autonomous arm VLM planner")
     parser.add_argument("--simulation", action="store_true", help="Run in simulation mode using local simulation images")
     parser.add_argument("--log", action="store_true", help="Show detailed planner/executor logs")
+    parser.add_argument(
+        "--model",
+        default=os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
+        help="VLM model name. Default: DEFAULT_VLM_MODEL or gemini-2.0-flash-exp",
+    )
     parser.add_argument(
         "--transport",
         default=os.getenv("INTERACTION_TRANSPORT", "voice"),
@@ -662,6 +853,8 @@ def main():
         print("Set it using: export GENAI_API_KEY='your-key'")
         return
 
+    transport = None
+    planner = None
     try:
         # Initialize planner
         transport = create_message_transport(
@@ -674,7 +867,7 @@ def main():
             transport.start()
 
         planner = AutonomousArmVLMPlanner(
-            model_name=os.getenv("DEFAULT_VLM_MODEL", "gemini-2.0-flash-exp"),
+            model_name=args.model,
             simulation_mode=simulation_mode,
             verbose=verbose,
             transport=transport,
@@ -689,7 +882,7 @@ def main():
         print(f"  - Control method: {planner.executor.act_backend}")
         print(f"  - Transport: {args.transport}")
         print("  - Speak wake word (e.g. '你好机器人') followed by your request when using voice transport")
-        print("  - Type request from humanoid robot directly")
+        print("  - Type a user request directly")
         print("  - 'models' or 'm': List available VLM models")
         print("  - 'switch <model>': Switch VLM model")
         print("  - 'status' or 's': Show task status")
@@ -718,8 +911,6 @@ def main():
             # Handle commands
             if user_input.lower() in ['quit', 'q']:
                 print("👋 Goodbye!")
-                if transport:
-                    transport.stop()
                 break
 
             elif user_input.lower() in ['models', 'm']:
@@ -751,7 +942,7 @@ def main():
             result = planner.start_new_task(user_input, run_autonomously=True)
 
             # Handle result (Clarification)
-            if result.get("status") == "waiting_for_humanoid":
+            if result.get("status") in {"waiting_for_user", "waiting_for_humanoid"}:
                 print(f"\n❓ {result['question']}")
                 print("Your response (speak or type) > ", end="", flush=True)
                 
@@ -768,7 +959,7 @@ def main():
                     if rlist:
                         response = sys.stdin.readline().strip()
                 
-                result = planner.provide_humanoid_response(response)
+                result = planner.provide_user_response(response)
 
             # Show final result
             if result.get("error") or result.get("success") is False:
@@ -780,11 +971,12 @@ def main():
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted. Goodbye!")
-        if 'transport' in locals() and transport:
-            transport.stop()
     except Exception as e:
         print(f"❌ Error: {str(e)}")
-        if 'transport' in locals() and transport:
+    finally:
+        if planner:
+            planner.close()
+        if transport:
             transport.stop()
 
 

@@ -102,20 +102,26 @@ ACTION_SCHEMAS: Dict[str, Dict[str, Dict[str, object]]] = {
         "speak": {
             "action_type": "talk",
             "skill": "speak_and_report",
-            "keywords": ["say", "report", "notify", "tell"],
-            "follow_up_skills": [],
-        },
-        "send_agent_message": {
-            "action_type": "talk",
-            "skill": "send_agent_message",
-            "keywords": ["message humanoid", "notify humanoid", "send message", "group chat", "lark", "feishu"],
+            "keywords": ["say", "report", "notify", "tell", "回复", "告诉", "说明"],
             "follow_up_skills": [],
         },
         "pick_and_place": {
             "action_type": "act",
             "skill": "store_pick_and_place",
-            "keywords": ["pick", "place", "move", "counter", "shelf", "water", "snack", "fruit", "medicine"],
+            "keywords": ["pick", "place", "move", "counter", "shelf", "water", "snack", "fruit", "medicine", "桌", "收拾", "整理", "清理"],
             "follow_up_skills": ["speak_and_report", "observe_workspace"],
+        },
+        "control_light": {
+            "action_type": "tool",
+            "skill": "control_home_devices",
+            "keywords": ["light", "lights", "lamp", "dark", "bright", "reading", "desk lamp", "background light", "台灯", "背景光", "看书", "阅读"],
+            "follow_up_skills": ["speak_and_report"],
+        },
+        "play_audio": {
+            "action_type": "tool",
+            "skill": "play_audio",
+            "keywords": ["music", "audio", "white noise", "background sound", "rain sound", "noise", "音乐", "白噪音", "背景音", "看书", "阅读"],
+            "follow_up_skills": ["speak_and_report"],
         },
         "store_memory": {
             "action_type": "tool",

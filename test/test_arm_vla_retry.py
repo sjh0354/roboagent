@@ -56,8 +56,10 @@ class _RetryPlanner:
     _max_vla_retries = AutonomousArmVLMPlanner._max_vla_retries
     _should_retry_failed_vla_action = AutonomousArmVLMPlanner._should_retry_failed_vla_action
     _build_retry_context = AutonomousArmVLMPlanner._build_retry_context
+    _infer_post_action_visual_outcome = AutonomousArmVLMPlanner._infer_post_action_visual_outcome
     _execute_step_real = AutonomousArmVLMPlanner._execute_step_real
     _build_context_message = AutonomousArmVLMPlanner._build_context_message
+    _final_reading_confirmation_spoken = AutonomousArmVLMPlanner._final_reading_confirmation_spoken
     _completed_recorded_cleanup_items = lambda self: set()
     _uses_recorded_trajectory_backend = lambda self: False
     _is_reading_desk_cleanup_request = lambda self: False
@@ -76,9 +78,31 @@ class _RetryPlanner:
         self.task_error = None
         self.pending_retry_context = None
         self.transient_memory_packet = None
+        self.latest_visual_outcome = None
         self.vla_retry_count = 0
         self.original_request = "clear the reading desk"
         self.current_observation_image = "simulation_images/store/default.jpg"
+        self.delta_call_kwargs = None
+
+        def _analyze_action_visual_delta(**kwargs):
+            self.delta_call_kwargs = kwargs
+            return {
+                "observed_changes": ["item changed"],
+                "objects_moved_or_removed": [],
+                "objects_remaining": [],
+                "gripper_or_arm_state": "unknown",
+                "scene_change_notes": [],
+                "action_context_used": bool(kwargs.get("include_action_context")),
+                "contradicts_requested_action": False,
+                "state_update": "item changed",
+                "confidence": "medium",
+            }
+
+        self.vlm_client = type(
+            "DeltaClient",
+            (),
+            {"analyze_action_visual_delta": lambda _client, **kwargs: _analyze_action_visual_delta(**kwargs)},
+        )()
 
     def _apply_real_trajectory_policy(self, next_step, parameters):
         return None
@@ -125,6 +149,84 @@ def test_retryable_vla_failure_keeps_arm_planner_alive(monkeypatch):
     assert planner.vla_retry_count == 0
 
 
+def test_reading_cleanup_context_uses_visual_outcome_feedback():
+    class ReadingPlanner(_RetryPlanner):
+        _is_reading_desk_cleanup_request = lambda self: True
+
+    planner = ReadingPlanner()
+    planner.execution_history.append(
+        {
+            "step_number": 1,
+            "action": "pick_and_place",
+            "parameters": {"item_name": "water", "source": "tray", "target": "basket"},
+            "assumed_successful": True,
+            "execution_result": {"success": True, "data": {"backend": "vla", "pi0_steps": 12}},
+        }
+    )
+
+    context = planner._build_context_message()
+
+    assert "READING DESK CLEANUP COMPLETION RULE" in context
+    assert "Treat execution history as attempted commands" in context
+    assert "post-action visual outcome feedback" in context
+
+
+def test_post_action_visual_outcome_is_added_to_next_context(monkeypatch):
+    monkeypatch.setenv("POST_ACTION_VLM_COMPARE", "1")
+
+    class ReadingPlanner(_RetryPlanner):
+        _is_reading_desk_cleanup_request = lambda self: True
+
+    planner = ReadingPlanner()
+    planner.executor.calls = 1
+    planner._execute_step_real(
+        {
+            "next_step": {
+                "step_number": 1,
+                "action_type": "act",
+                "action": "pick_and_place",
+                "parameters": {"item_name": "water", "source": "tray", "target": "basket"},
+            }
+        }
+    )
+
+    context = planner._build_context_message()
+
+    assert planner.latest_visual_outcome is not None
+    assert planner.execution_history[-1]["visual_outcome"] == planner.latest_visual_outcome
+    assert planner.delta_call_kwargs["include_action_context"] is False
+    assert planner.latest_visual_outcome["visual_delta_mode"] == "action_blind"
+    assert planner.latest_visual_outcome["visual_delta"]["action_context_used"] is False
+    assert "POST-ACTION VISUAL OUTCOME FEEDBACK" in context
+    assert "Trust observed visual changes over the requested action parameters" in context
+    assert '"requested_action": "pick_and_place"' in context
+    assert '"visual_delta"' in context
+    assert "item changed" in context
+
+
+def test_final_reading_speak_requires_completion_json():
+    class ReadingPlanner(_RetryPlanner):
+        _is_reading_desk_cleanup_request = lambda self: True
+
+    planner = ReadingPlanner()
+    planner.execution_history.append(
+        {
+            "step_number": 5,
+            "action": "speak",
+            "parameters": {"message": "桌子已清理，阅读灯和背景音已为您打开。"},
+            "assumed_successful": True,
+            "execution_result": {"success": True},
+        }
+    )
+
+    context = planner._build_context_message()
+
+    assert planner._final_reading_confirmation_spoken() is True
+    assert "TERMINATION REQUIRED" in context
+    assert "Do not call `speak` again" in context
+    assert "`next_step: null`" in context
+
+
 def test_observe_workspace_is_normalized_to_get_observation():
     planner = _RetryPlanner()
 
@@ -147,6 +249,33 @@ def test_observe_workspace_is_normalized_to_get_observation():
 
     assert payload["next_step"]["action"] == "get_observation"
     assert payload["next_step"]["action_type"] == "sense"
+
+
+def test_speak_action_type_is_corrected_to_talk():
+    planner = _RetryPlanner()
+
+    payload = planner._normalize_step_plan_payload(
+        {
+            "current_step_analysis": {
+                "visual_state": "reading setup complete",
+                "task_progress": "ready to report",
+                "next_action_reasoning": "final confirmation",
+            },
+            "next_step": {
+                "step_number": 5,
+                "agent": "ur5e_arm",
+                "location": "home",
+                "action": "speak",
+                "action_type": "tool",
+                "parameters": {"message": "桌子已清理，阅读灯和背景音已为您打开。"},
+            },
+            "needs_human_input": False,
+            "user_question": None,
+        }
+    )
+
+    assert payload["next_step"]["action"] == "speak"
+    assert payload["next_step"]["action_type"] == "talk"
 
 
 def test_non_retryable_real_failure_marks_task_failed():

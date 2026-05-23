@@ -319,13 +319,14 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
             subprocess.run(stale_cleanup_cmd, check=False)
             
             # 2. Run inference script INSIDE Docker
-            # Command: docker exec -u 1002 -e INSTRUCTION="..." -w ... <container> ./run_pi0_inference.sh
+            # Command: docker exec -u 1002 -e INSTRUCTION="..." -w ... <container> bash ./run_pi0_inference.sh
             cmd = [
                 "docker", "exec",
                 "-e", f"INSTRUCTION={instruction}",
                 "-u", "1002",
                 "-w", "/home/ef/projects/ur5e-arm-teleoperation",
                 container_name,
+                "bash",
                 "./run_pi0_inference.sh"
             ]
 
@@ -338,20 +339,24 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
             if self.verbose:
                 print(f"   Running inside Docker: {' '.join(cmd)}")
             
+            start_observation = self._capture_pre_action_observation()
+            launch_started_at = time.time()
             subprocess.run(cmd, check=True)
-            
-            # 3. Wait for action to complete (since script is non-blocking tmux)
-            wait_time = 120
-            if self.verbose:
-                print(f"   ⏳ Waiting {wait_time}s for robot action to complete...")
-            time.sleep(wait_time)
 
-            log_path, steps = self._get_latest_pi0_action_steps(
-                "/home/ef/projects/ur5e-arm-teleoperation/logs"
+            # 3. Wait for PI0 to stop producing control steps before returning to the planner.
+            # The launch script starts detached tmux panes, so subprocess completion only means
+            # the action was launched. Planning must not continue until robot motion is quiescent.
+            log_path, steps, wait_info = self._wait_for_pi0_action_completion(
+                "/home/ef/projects/ur5e-arm-teleoperation/logs",
+                started_at=launch_started_at,
+                instruction=instruction,
+                start_image=start_observation,
+                container_name=container_name,
             )
             if self.verbose and log_path:
                 print(f"   PI0 action log: {log_path}")
                 print(f"   PI0 steps observed: {steps}")
+                print(f"   PI0 wait result: {wait_info}")
 
             if steps <= 0:
                 if keep_session_on_fail:
@@ -369,6 +374,8 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
                         "backend": "vla",
                         "pi0_action_log": log_path,
                         "pi0_steps": steps,
+                        "pi0_wait": wait_info,
+                        "pi0_monitor": wait_info.get("monitor"),
                         "pi0_pane_tail": diagnostics,
                         "cleanup_skipped": keep_session_on_fail,
                         "retryable": True,
@@ -384,6 +391,8 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
                     "backend": "vla",
                     "pi0_action_log": log_path,
                     "pi0_steps": steps,
+                    "pi0_wait": wait_info,
+                    "pi0_monitor": wait_info.get("monitor"),
                 },
             )
 
@@ -591,9 +600,210 @@ class VisionEnabledArmExecutor(VisionEnabledMixin, ArmExecutor):
             return parsed
         return None
 
-    def _get_latest_pi0_action_steps(self, log_dir: str):
+    def _wait_for_pi0_action_completion(
+        self,
+        log_dir: str,
+        started_at: float,
+        instruction: str = "",
+        start_image: str = "",
+        container_name: str = "exp_ef_ur5e-arm-teleopration",
+    ):
+        fixed_wait = os.getenv("PI0_ACTION_FIXED_WAIT_SECONDS")
+        if fixed_wait:
+            wait_seconds = float(fixed_wait)
+            if self.verbose:
+                print(f"   ⏳ Waiting fixed {wait_seconds:.1f}s for PI0 action to complete...")
+            time.sleep(wait_seconds)
+            self._stop_pi0_session(container_name)
+            log_path, steps = self._get_latest_pi0_action_steps(
+                log_dir,
+                min_mtime=started_at - 5.0,
+            )
+            return log_path, steps, {
+                "mode": "fixed",
+                "elapsed_seconds": round(wait_seconds, 2),
+                "reason": "fixed_wait_elapsed",
+            }
+
+        timeout_seconds = float(os.getenv("PI0_ACTION_TIMEOUT_SECONDS", "120"))
+        max_useful_seconds = float(os.getenv("PI0_ACTION_MAX_USEFUL_SECONDS", "90"))
+        min_wait_seconds = float(os.getenv("PI0_ACTION_MIN_WAIT_SECONDS", "15"))
+        idle_seconds = float(os.getenv("PI0_ACTION_IDLE_SECONDS", "12"))
+        poll_seconds = float(os.getenv("PI0_ACTION_POLL_SECONDS", "2"))
+        monitor_enabled = os.getenv("PI0_ACTION_VLM_MONITOR", "1") == "1"
+        monitor_interval = float(os.getenv("PI0_ACTION_VLM_MONITOR_INTERVAL_SECONDS", "10"))
+        monitor_min_elapsed = float(os.getenv("PI0_ACTION_VLM_MONITOR_MIN_SECONDS", "40"))
+        monitor_max_frames = max(0, int(os.getenv("PI0_ACTION_VLM_MONITOR_MAX_PROCESS_FRAMES", "4")))
+        stuck_min_elapsed = float(os.getenv("PI0_ACTION_STUCK_MIN_SECONDS", "55"))
+
+        if self.verbose:
+            print(
+                "   ⏳ Monitoring PI0 action "
+                f"(min={min_wait_seconds:.1f}s, max_useful={max_useful_seconds:.1f}s, "
+                f"monitor={monitor_enabled}, monitor_min={monitor_min_elapsed:.1f}s, "
+                f"stuck_min={stuck_min_elapsed:.1f}s, timeout={timeout_seconds:.1f}s)..."
+            )
+
+        latest_log_path = None
+        latest_steps = 0
+        last_progress_at = time.time()
+        deadline = time.time() + timeout_seconds
+        next_monitor_at = started_at + monitor_min_elapsed
+        reason = "timeout"
+        monitor_result = None
+
+        while time.time() < deadline:
+            log_path, steps = self._get_latest_pi0_action_steps(
+                log_dir,
+                min_mtime=started_at - 5.0,
+            )
+            now = time.time()
+
+            if log_path != latest_log_path or steps > latest_steps:
+                latest_log_path = log_path
+                latest_steps = steps
+                last_progress_at = now
+                if self.verbose and steps > 0:
+                    print(f"   PI0 progress: {steps} control steps")
+
+            elapsed = now - started_at
+            idle_elapsed = now - last_progress_at
+            if monitor_enabled and now >= next_monitor_at and start_image and self.vlm_client:
+                monitor_result = self._assess_pi0_action_progress(
+                    instruction=instruction,
+                    start_image=start_image,
+                    elapsed_seconds=elapsed,
+                    max_process_frames=monitor_max_frames,
+                )
+                next_monitor_at = now + monitor_interval
+                if monitor_result and monitor_result.get("recommended_stop"):
+                    decision = str(monitor_result.get("decision") or "stop").lower()
+                    if decision == "stuck" and elapsed < stuck_min_elapsed:
+                        if self.verbose:
+                            print(
+                                "   ⚠️  Ignoring early VLM stuck decision "
+                                f"at {elapsed:.1f}s (< {stuck_min_elapsed:.1f}s)."
+                            )
+                    else:
+                        reason = f"vlm_{decision}"
+                        break
+
+            if latest_steps > 0 and max_useful_seconds > 0 and elapsed >= max_useful_seconds:
+                reason = "max_useful_time"
+                break
+
+            if (
+                os.getenv("PI0_ACTION_ALLOW_LOG_IDLE_STOP", "0") == "1"
+                and latest_steps > 0
+                and elapsed >= min_wait_seconds
+                and idle_elapsed >= idle_seconds
+            ):
+                reason = "log_idle"
+                break
+
+            time.sleep(max(0.2, poll_seconds))
+
+        self._stop_pi0_session(container_name)
+
+        return latest_log_path, latest_steps, {
+            "mode": "vlm_monitor" if monitor_enabled else "timeout",
+            "elapsed_seconds": round(time.time() - started_at, 2),
+            "idle_seconds": round(time.time() - last_progress_at, 2),
+            "reason": reason,
+            "timeout_seconds": timeout_seconds,
+            "max_useful_seconds": max_useful_seconds,
+            "min_wait_seconds": min_wait_seconds,
+            "stuck_min_seconds": stuck_min_elapsed,
+            "monitor": monitor_result,
+        }
+
+    def _assess_pi0_action_progress(
+        self,
+        *,
+        instruction: str,
+        start_image: str,
+        elapsed_seconds: float,
+        max_process_frames: int,
+    ):
+        if not self.camera_manager or not self.vlm_client:
+            return None
+        current_snapshot = self._capture_observation_snapshot(include_vlm_description=False, quiet=True)
+        current_image = (current_snapshot or {}).get("image_path")
+        if not current_image:
+            return None
+
+        process_frames = self._capture_monitor_process_sequence(
+            max_frames=max_process_frames,
+            exclude_paths={start_image, current_image},
+        )
+        if getattr(self, "observation_buffer", None):
+            frames = self.observation_buffer.get_frames_between(
+                max(0, time.time() - max(5.0, elapsed_seconds)),
+                time.time(),
+                max_frames=max_process_frames,
+            )
+            for frame in frames:
+                image_path = getattr(frame, "image_path", None)
+                excluded = {start_image, current_image}
+                if image_path and image_path not in excluded:
+                    process_frames.append(
+                        {
+                            "image_path": image_path,
+                            "label": getattr(frame, "source", "buffer"),
+                        }
+                    )
+
+        return self.vlm_client.assess_long_action_progress(
+            instruction=instruction,
+            start_image=start_image,
+            current_image=current_image,
+            process_images=process_frames[:max_process_frames],
+            elapsed_seconds=elapsed_seconds,
+        )
+
+    def _capture_monitor_process_sequence(self, max_frames: int, exclude_paths: set):
+        if max_frames <= 0 or not self.camera_manager:
+            return []
+        count = max(0, int(os.getenv("PI0_ACTION_VLM_MONITOR_SEQUENCE_FRAMES", str(max_frames))))
+        count = min(count, max_frames)
+        interval = float(os.getenv("PI0_ACTION_VLM_MONITOR_SEQUENCE_INTERVAL_SECONDS", "2.5"))
+        frames = []
+        for index in range(count):
+            if index > 0 and interval > 0:
+                time.sleep(interval)
+            snapshot = self._capture_observation_snapshot(include_vlm_description=False, quiet=True)
+            image_path = (snapshot or {}).get("image_path")
+            if image_path and image_path not in exclude_paths:
+                frames.append(
+                    {
+                        "image_path": image_path,
+                        "label": f"t-{round((count - index - 1) * interval, 1)}s" if index < count - 1 else "t",
+                        "order": index + 1,
+                    }
+                )
+        return frames
+
+    def _stop_pi0_session(self, container_name: str) -> None:
+        stop_cmd = [
+            "docker", "exec",
+            "-u", "1002",
+            "-w", "/home/ef/projects/ur5e-arm-teleoperation",
+            container_name,
+            "bash", "-lc",
+            "./kill_project.sh || true",
+        ]
+        if self.verbose:
+            print("   🛑 Stopping PI0 tmux/controller session...")
+        subprocess.run(stop_cmd, check=False)
+
+    def _get_latest_pi0_action_steps(self, log_dir: str, min_mtime: float = None):
         pattern = os.path.join(log_dir, "pi0_actions_*.log")
         candidates = glob.glob(pattern)
+        if min_mtime is not None:
+            candidates = [
+                path for path in candidates
+                if os.path.getmtime(path) >= min_mtime
+            ]
         if not candidates:
             return None, 0
 

@@ -30,10 +30,19 @@ class BaseVLMPlanner:
         system_prompt_getter,
         legacy_prompt_getter,
     ):
-        self.api_key = api_key or os.getenv("GENAI_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+        self.api_key = (
+            api_key
+            or os.getenv("GENAI_API_KEY")
+            or os.getenv("DASHSCOPE_API_KEY")
+            or os.getenv("PLANNER_VLM_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or os.getenv("SHARESAI_API_KEY")
+            or os.getenv("PI0_ACTION_MONITOR_API_KEY")
+        )
         if not self.api_key:
             raise ValueError(
-                "API key not found. Set GENAI_API_KEY environment variable or provide api_key parameter."
+                "API key not found. Set GENAI_API_KEY, PLANNER_VLM_API_KEY, OPENAI_API_KEY, "
+                "SHARESAI_API_KEY, or provide api_key parameter."
             )
 
         self.profile_name = profile_name
@@ -194,9 +203,32 @@ class BaseVLMPlanner:
                 messages=messages,
                 max_tokens=self.config["max_tokens"],
                 temperature=self.config["temperature"],
+                response_mime_type="application/json",
             )
             response_text = response.choices[0].message.content
             step_plan = self._parse_step_plan(response_text)
+            if step_plan.get("error"):
+                repair_messages = messages + [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Your previous response was not valid JSON for the planner. "
+                            "Return ONLY one valid JSON object matching the required schema. "
+                            "Do not include markdown, comments, explanations, or code fences."
+                        ),
+                    }
+                ]
+                if self.verbose:
+                    print("🔁 Retrying VLM planning with strict JSON-only instruction...")
+                response = self.vlm_client.create_chat_completion(
+                    model=self.config["model"],
+                    messages=repair_messages,
+                    max_tokens=self.config["max_tokens"],
+                    temperature=0,
+                    response_mime_type="application/json",
+                )
+                response_text = response.choices[0].message.content
+                step_plan = self._parse_step_plan(response_text)
             self.conversation_history.append({"role": "assistant", "content": response_text})
 
             if step_plan.get("next_step"):
@@ -769,7 +801,9 @@ class BaseVLMPlanner:
         canonical_action = self._canonical_action_name(action_name)
         if canonical_action != action_name:
             next_step["action"] = canonical_action
-            next_step["action_type"] = self._infer_action_type(canonical_action)
+        inferred_type = self._infer_action_type(canonical_action)
+        if inferred_type:
+            next_step["action_type"] = inferred_type
 
     def _canonical_action_name(self, action_name: Any) -> Any:
         if not isinstance(action_name, str) or not action_name.strip():
