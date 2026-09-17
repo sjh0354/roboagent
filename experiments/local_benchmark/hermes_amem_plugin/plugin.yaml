@@ -1,0 +1,3 @@
+name: amem
+version: 0.1.0
+description: "Isolated bridge to official agiresearch/A-mem for the RoboAgent local benchmark."

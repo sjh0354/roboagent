@@ -52,6 +52,8 @@ Thumbs.db
 # Local experiment outputs
 experiments/**/outputs/
 experiments/**/golden_traces/
+.runtime/
+.venv/
 
 # Personalized embodied-agent memory overlay
 agent/memory/local/

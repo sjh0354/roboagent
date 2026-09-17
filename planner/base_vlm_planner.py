@@ -566,9 +566,9 @@ class BaseVLMPlanner:
         }
         normalized = aliases.get(normalized, normalized)
         if normalized not in {"full", "none", "fixed"}:
-            if self.verbose:
-                print(f"⚠️  Unknown OMNICLAW_MEMORY_MODE={mode!r}; falling back to full")
-            return "full"
+            raise ValueError(
+                f"Unknown OMNICLAW_MEMORY_MODE={mode!r}; expected one of full/none/fixed"
+            )
         return normalized
 
     def _maybe_record_fixed_frequency_memory(self) -> None:

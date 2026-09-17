@@ -1,0 +1,20 @@
+{
+  "benchmark_id": "roboagent-local-sim-v1",
+  "model": "kimi-k3",
+  "base_single_attempt_success_prob": 0.50,
+  "effective_physical_success_prob": {"monitor_present": 0.85, "monitor_absent": 0.60},
+  "integrated_monitor_retry_limit": 2,
+  "explicit_physical_retries_simulated": false,
+  "execution_model": "direct_aggregate_bernoulli_per_normalized_embodied_goal",
+  "physical_rng_mode": "system_random_unseeded",
+  "seed_controls_physics": false,
+  "inter_episode_cooldown_seconds": 0,
+  "task_manifest": "experiments/local_benchmark/tasks/dev.jsonl",
+  "max_planner_steps": 12,
+  "model_timeout_seconds": 180,
+  "simulated_time_per_atomic_operation_seconds": 1.0,
+  "render": {"width": 640, "height": 480, "views": ["front", "side"], "depth": true},
+  "failure_modes": {"no_effect": 0.333333, "partial": 0.333333, "recoverable_stall": 0.333334},
+  "safety": {"real_hardware_disabled": true, "external_mutations_disabled": true},
+  "labels": ["simulated physical execution", "synthetic RGB-D"]
+}

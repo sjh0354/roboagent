@@ -22,14 +22,20 @@ def get_local_memory_root() -> str:
     return os.getenv("AGENT_LOCAL_MEMORY_ROOT", LOCAL_MEMORY_ROOT)
 
 
+def get_memory_inbox_root() -> str:
+    """Return an optional run-isolated candidate inbox."""
+    return os.getenv("AGENT_MEMORY_INBOX_ROOT", INBOX_ROOT)
+
+
 class MemoryManager:
     """Writes hardware/global memory candidates to the inbox."""
 
     def __init__(self, profile_name: str, verbose: bool = True):
         self.profile_name = profile_name
         self.verbose = verbose
-        self.hardware_inbox = os.path.join(INBOX_ROOT, "hardware")
-        self.global_inbox = os.path.join(INBOX_ROOT, "global")
+        inbox_root = get_memory_inbox_root()
+        self.hardware_inbox = os.path.join(inbox_root, "hardware")
+        self.global_inbox = os.path.join(inbox_root, "global")
         os.makedirs(get_local_memory_root(), exist_ok=True)
         os.makedirs(self.hardware_inbox, exist_ok=True)
         os.makedirs(self.global_inbox, exist_ok=True)
