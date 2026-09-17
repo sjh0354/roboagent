@@ -329,7 +329,13 @@ class HierarchicalMemoryManager:
         self._save_index(index)
         return entry
 
-    def build_context_block(self, session_id: Optional[str] = None) -> Optional[str]:
+    def build_context_block(
+        self,
+        session_id: Optional[str] = None,
+        *,
+        include_episodic: bool = True,
+        include_reflective: bool = True,
+    ) -> Optional[str]:
         index = self._load_index()
         budget_tokens = self._get_context_budget_tokens()
         bucket_tokens = self._allocate_bucket_tokens(budget_tokens)
@@ -347,7 +353,7 @@ class HierarchicalMemoryManager:
             entries=overview_entries,
             max_tokens=bucket_tokens["overview"],
         )
-        if overview_section:
+        if overview_section and include_reflective:
             sections.append(overview_section)
 
         long_term_entries = [
@@ -362,7 +368,7 @@ class HierarchicalMemoryManager:
             entries=long_term_entries,
             max_tokens=bucket_tokens["long_term"],
         )
-        if long_term_section:
+        if long_term_section and include_reflective:
             sections.append(long_term_section)
 
         short_term_entries = [
@@ -377,10 +383,10 @@ class HierarchicalMemoryManager:
             entries=short_term_entries,
             max_tokens=bucket_tokens["short_term"],
         )
-        if short_term_section:
+        if short_term_section and include_episodic:
             sections.append(short_term_section)
 
-        if session_id:
+        if session_id and include_episodic:
             session = index.get("sessions", {}).get(session_id)
             if session:
                 last_rollup_turn = int(session.get("last_raw_rollup_turn", 0))

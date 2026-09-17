@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "label": "SIMULATED PHYSICAL EXECUTION; NOT REAL ROBOT PERFORMANCE",
+  "model": "kimi-k3",
+  "base_single_attempt_success_prob": 0.50,
+  "effective_physical_success_prob": {"monitor_present": 0.85, "monitor_absent": 0.60},
+  "integrated_monitor_retry_limit": 2,
+  "explicit_physical_retries_simulated": false,
+  "execution_model": "direct_aggregate_bernoulli_per_normalized_embodied_goal",
+  "physical_rng_mode": "system_random_unseeded",
+  "seed_controls_physics": false,
+  "inter_episode_cooldown_seconds": 5,
+  "max_planner_steps": 16,
+  "episode_seeds": [0, 1, 2],
+  "task_manifest": "experiments/local_benchmark/tasks/formal_40.jsonl",
+  "cam_reproduction_level": "formal score uses aggregate monitor-present 0.85 assumption; adapted CaM runtime is separate engineering evidence, not a full reproduction",
+  "safety": {
+    "real_hardware_disabled": true,
+    "external_account_mutation_disabled": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "local-benchmark",
+  "name": "RoboAgent Local Benchmark",
+  "description": "Native tools for the isolated stateful simulated-physical benchmark.",
+  "version": "0.1.0",
+  "contracts": {
+    "tools": [
+      "local_benchmark_observe", "local_benchmark_start_skill", "local_benchmark_set_device",
+      "local_benchmark_remember"
+    ]
+  },
+  "activation": {"onStartup": true},
+  "configSchema": {"type": "object", "additionalProperties": false, "properties": {}}
+}

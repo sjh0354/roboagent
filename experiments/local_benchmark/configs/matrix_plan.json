@@ -1,0 +1,40 @@
+{
+  "protocol_label": "SIMULATED PHYSICAL EXECUTION; NOT REAL ROBOT PERFORMANCE",
+  "episode_seeds": [0, 1, 2],
+  "repeat_id_note": "0,1,2 are repetition ids only and never seed physical randomness",
+  "physical_execution_model": {
+    "base_single_attempt_success_prob": 0.50,
+    "monitor_present_effective_prob": 0.85,
+    "monitor_absent_effective_prob": 0.60,
+    "monitor_retry_limit_integrated": 2,
+    "explicit_retries_simulated": false,
+    "rng": "system_random_unseeded"
+  },
+  "main_external": {
+    "methods": ["hermes_native", "openclaw_native", "hermes_amem", "hermes_cam", "hermes_amem_cam"],
+    "tasks": "all",
+    "note": "Join omniact rows from core_ablation. Hermes CaM-labelled rows use the monitor-present 0.85 aggregate assumption; adapted CaM runtime evidence is separate and is not a full CaM reproduction."
+  },
+  "core_ablation": {
+    "methods": ["iterative_posthoc", "iterative_memory", "iterative_monitor", "omniact"],
+    "tasks": "all"
+  },
+  "mechanisms": {
+    "methods": [
+      "timing_posthoc", "timing_online_stop", "timing_online_delayed",
+      "vision_endpoint", "vision_temporal",
+      "memory_raw_sliding", "memory_same_model_summary", "memory_rag",
+      "omniact", "omniact_no_episodic", "omniact_no_reflective", "hermes_amem"
+    ],
+    "tasks": [
+      "formal_manipulation_01", "formal_manipulation_05", "formal_manipulation_13", "formal_manipulation_17",
+      "formal_navigation_01", "formal_navigation_05", "formal_navigation_13", "formal_navigation_17"
+    ],
+    "selection_rule": "Frozen before formal execution: two tasks per domain at high complexity and one each at low/medium complexity."
+  },
+  "formal_pilot": {
+    "methods": ["iterative_posthoc", "iterative_memory", "iterative_monitor", "omniact"],
+    "tasks": ["formal_manipulation_01", "formal_navigation_01"],
+    "note": "Protocol-validation pilot only; never merge into full-matrix claims."
+  }
+}
